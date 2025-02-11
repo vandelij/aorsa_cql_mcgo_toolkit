@@ -288,6 +288,6 @@ class Aorsa_Analysis():
         self.save_aorsa2d_out()
         print(f'Done. Sending namelist {self.save_aorsa_file_name} to:')
         print(f'{self.remote_host}:{self.remote_work_dir}')
-        os.system(f'scp {self.local_work_dir}{self.save_aorsa_file_name} {self.remote_host}:{self.remote_work_dir}')
-        print(f'scp {self.local_work_dir}{self.save_aorsa_file_name} {self.remote_host}:{self.remote_work_dir}')
+        os.system(f'scp {self.local_work_dir}{self.save_aorsa_file_name} {self.remote_host}:{self.remote_work_dir}/aorsa2d_recieved.in')
+        print(f'scp {self.local_work_dir}{self.save_aorsa_file_name} {self.remote_host}:{self.remote_work_dir}/aorsa2d_recieved.in')
         print('Done.')
