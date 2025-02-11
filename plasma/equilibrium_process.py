@@ -69,7 +69,7 @@ def readGEQDSK(filename='eqdsk.dat', dointerior=False, doplot=None, width=9, dol
 
 #bbbsRE  = re.compile ( '( {1,3}\d?\d?\d?\d\d {1,3}\d?\d?\d?\d\d)' )   # Candidate dimension lines (2i5 fortran code)
     bbbsRE  = re.compile ( r'(?m)^.{10}\n' ) #there should be only one 10 character line
-    print('bbbsRE: ', bbbsRE) #TODO: delete mee
+    #print('bbbsRE: ', bbbsRE) #TODO: delete mee
     dataStr     = valuesRE.findall ( data )
     headerStr   = headerRE.findall ( data )
     bbbStr  = bbbsRE.findall ( data )
@@ -77,7 +77,7 @@ def readGEQDSK(filename='eqdsk.dat', dointerior=False, doplot=None, width=9, dol
     file.close ()
     if len(bbbStr) > 0:
         nbbbsStr    = dimensionsRE5.findall ( bbbStr[0] )
-        print('nbbbsStr: ', nbbbsStr) #TODO: delete mee
+        #print('nbbbsStr: ', nbbbsStr) #TODO: delete mee
     else:
         print('no bounding box found. should be Line with 2 integers length of 10 characters')
         return -1

@@ -1,8 +1,14 @@
 from scipy.interpolate import PchipInterpolator
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.tri as tri
 import f90nml as f90
 import os
+import meshio
+
+# import helpers for eqdsk processing
+import plasma
+
 
 class Aorsa_Analysis():
     """
@@ -291,3 +297,168 @@ class Aorsa_Analysis():
         os.system(f'scp {self.local_work_dir}{self.save_aorsa_file_name} {self.remote_host}:{self.remote_work_dir}/aorsa2d_recieved.in')
         print(f'scp {self.local_work_dir}{self.save_aorsa_file_name} {self.remote_host}:{self.remote_work_dir}/aorsa2d_recieved.in')
         print('Done.')
+
+
+# POST PROCESSING TOOLS
+class Aorsa_Post_Process():
+    """
+    Class to post-process the various output files from an Aorsa run 
+    """
+    def __init__(self, vtk_file, aorsa2d_input_file, eqdsk_file):
+        self.vtk_file = vtk_file # global path to the vtk file 
+        self.aorsa2d_input_file = aorsa2d_input_file
+
+        self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(eqdsk_file, doplot=False)
+        self.aorsanml = f90.read(self.aorsa2d_input_file)
+
+        self.R_wall = self.eqdsk['rlim']
+        self.Z_wall = self.eqdsk['zlim']
+
+        self.R_lcfs = self.eqdsk['rbbbs']
+        self.Z_lcfs = self.eqdsk['zbbbs']
+
+        self.read_mesh()
+
+    def plot_equilibrium(self, figsize, levels):
+        psizr = self.eqdsk['psizr']
+        plt.figure(figsize=figsize)
+        plt.axis('equal')
+        img = plt.contour( self.eqdsk['r'], self.eqdsk['z'], psizr.T, levels= levels)
+        plt.plot(self.eqdsk['rlim'], self.eqdsk['zlim'], color='black', linewidth=3)
+        plt.plot(self.eqdsk['rbbbs'], self.eqdsk['zbbbs'], color='black', linewidth=3)
+        plt.colorbar(img)
+        plt.show()
+
+    def read_mesh(self):
+        self.mesh = meshio.read(self.vtk_file)
+        self.R_array = self.mesh.points[:,0]
+        self.Z_array = self.mesh.points[:,1]
+        self.triangulation = tri.Triangulation(self.R_array, self.Z_array)
+
+    def print_mesh_info(self):
+        print('Mesh:')
+        print(self.mesh)
+        print('\nmesh.points.shape: ', self.mesh.points.shape) # note mesh.points has numpoints rows and 3 collumns, where col 0 is R, and col2 is Z
+
+    def plot_result_2D(self, key, title, cbar_label, cmap='viridis', figsize=(3,6), logplot=False, return_plot=False):
+        fig, ax = plt.subplots(figsize=figsize)
+
+        if logplot:
+            tcf=ax.tricontourf(self.R_array, self.Z_array, (np.abs(self.mesh.point_data[key][:,0])+1), 400, cmap=cmap)
+        else:
+            tcf=ax.tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0], 400, cmap=cmap)
+        cb = fig.colorbar(tcf)
+        cb.set_label(cbar_label)
+        ax.axis('equal')
+        ax.set_xlabel('R [m]')
+        ax.set_ylabel('Z [m]')
+        ax.set_title(title)
+        ax.plot(self.R_lcfs, self.Z_lcfs, 'black')
+        ax.plot(self.R_wall, self.Z_wall)
+    
+        if return_plot:
+            return fig, ax
+        
+        plt.show()
+
+    def plot_Eplus_Eminus(self, cmap='viridis', figsize=(6,6), logplot=False, return_plot=False):
+        fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+        # plot total abosorption 
+        if logplot:
+            toplot0 = np.log(np.abs(self.mesh.point_data['re_eminus'][:,0])+1)
+            tcf0=axs[0].tricontourf(self.R_array, self.Z_array, toplot0, 400, cmap=cmap)
+            axs[0].set_title(r'ln(|Re(E$_{-}$)| + 1)')
+            toplot1 = np.log(np.abs(self.mesh.point_data['re_eplus'][:,0])+1)
+            tcf1=axs[1].tricontourf(self.R_array, self.Z_array, toplot1, 400, cmap=cmap)
+            axs[1].set_title(r'ln(|Re(E$_{+}$)| + 1)')
+        else:
+            tcf0=axs[0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['re_eminus'][:,0], 400, cmap=cmap)
+            tcf1=axs[1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['re_eplus'][:,0], 400, cmap=cmap)
+            axs[0].set_title(r'Re(E$_{-}$)')
+            axs[1].set_title(r'Re(E$_{+}$)')
+
+
+        cb0 = fig.colorbar(tcf0)
+        cb0.set_label(r'arb. units')
+        axs[0].axis('equal')
+        axs[0].set_xlabel('R [m]')
+        axs[0].set_ylabel('Z [m]')
+        axs[0].plot(self.R_lcfs, self.Z_lcfs, 'black')
+        axs[0].plot(self.R_wall, self.Z_wall)
+
+        cb1 = fig.colorbar(tcf1)
+        cb1.set_label(r'arb. units')
+        axs[1].axis('equal')
+        axs[1].set_xlabel('R [m]')
+        axs[1].set_ylabel('Z [m]')
+        axs[1].plot(self.R_lcfs, self.Z_lcfs, 'black')
+        axs[1].plot(self.R_wall, self.Z_wall)
+
+        if return_plot:
+            return fig, axs
+        plt.plot()
+        
+    def plot_species_absorption(self, figsize, return_fig=False):
+        ion_names = self.aorsanml['STATE']['S_S_NAME'][1:]
+
+        if len(ion_names) > 2:
+            fig, axs = plt.subplots(3, 2, figsize=figsize)
+        else:
+            fig, axs = plt.subplots(2, 2, figsize=figsize)
+
+        # plot total abosorption 
+        tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0], 400, cmap='hot')
+        cb0 = fig.colorbar(tcf0)
+        cb0.set_label(r'W/$m^3$')
+        axs[0,0].axis('equal')
+        axs[0,0].set_xlabel('R [m]')
+        axs[0,0].set_ylabel('Z [m]')
+        axs[0,0].set_title(r'$\dot{w}_{tot}$')
+        axs[0,0].plot(self.R_lcfs, self.Z_lcfs, 'black')
+        axs[0,0].plot(self.R_wall, self.Z_wall)
+
+        # plot electron absorption 
+        tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0], 400, cmap='hot')
+        cb1 = fig.colorbar(tcf1)
+        cb1.set_label(r'W/$m^3$')
+        axs[0,1].axis('equal')
+        axs[0,1].set_xlabel('R [m]')
+        axs[0,1].set_ylabel('Z [m]')
+        axs[0,1].set_title(r'$\dot{w}_{e}$ Electron Absorption')
+        axs[0,1].plot(self.R_lcfs, self.Z_lcfs, 'black')
+        axs[0,1].plot(self.R_wall, self.Z_wall)
+
+        for i in range(len(ion_names)):
+            if i == 0:
+                row = 1
+                col= 0
+
+            elif i == 1:
+                row = 1
+                col = 1
+
+            elif i == 2:
+                row = 2
+                col = 0
+
+            elif i == 3:
+                row = 2
+                col = 1
+            
+            key = 'wdoti' + str(i+1)
+
+            tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0], 400, cmap='hot')
+            cb = fig.colorbar(tcf)
+            cb.set_label(r'W/$m^3$')
+            axs[row, col].axis('equal')
+            axs[row, col].set_xlabel('R [m]')
+            axs[row, col].set_ylabel('Z [m]')
+            axs[row, col].set_title(r'$\dot{w}_i$ ' + f'Ion {str(i+1)} = '+ f'{ion_names[i]} Absorption')
+            axs[row, col].plot(self.R_lcfs, self.Z_lcfs, 'black')
+            axs[row, col].plot(self.R_wall, self.Z_wall)
+
+        if return_fig:
+            return fig, axs
+
+        plt.show()
