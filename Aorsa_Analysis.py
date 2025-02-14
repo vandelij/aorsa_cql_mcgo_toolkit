@@ -257,10 +257,32 @@ class Aorsa_Analysis():
                 self.aorsa_nml['aorsa2din']['ndisti1'] = self.species_ndist[name]
                 self.aorsa_nml['aorsa2din']['amu1'] = round(self.species_mass[name]/one_amu)
                 self.aorsa_nml['aorsa2din']['z1'] = round(self.species_charge[name]/proton_charge)
+                
             elif i ==2:
                 self.aorsa_nml['aorsa2din']['ndisti2'] = self.species_ndist[name]
                 self.aorsa_nml['aorsa2din']['amu2'] = round(self.species_mass[name]/one_amu)
                 self.aorsa_nml['aorsa2din']['z2'] = round(self.species_charge[name]/proton_charge)
+
+            elif i ==3:
+                self.aorsa_nml['aorsa2din']['ndisti3'] = self.species_ndist[name]
+                self.aorsa_nml['aorsa2din']['amu3'] = round(self.species_mass[name]/one_amu)
+                self.aorsa_nml['aorsa2din']['z3'] = round(self.species_charge[name]/proton_charge)  
+
+            elif i ==4:
+                self.aorsa_nml['aorsa2din']['ndisti4'] = self.species_ndist[name]
+                self.aorsa_nml['aorsa2din']['amu4'] = round(self.species_mass[name]/one_amu)
+                self.aorsa_nml['aorsa2din']['z4'] = round(self.species_charge[name]/proton_charge) 
+
+            elif i ==5:
+                self.aorsa_nml['aorsa2din']['ndisti5'] = self.species_ndist[name]
+                self.aorsa_nml['aorsa2din']['amu5'] = round(self.species_mass[name]/one_amu)
+                self.aorsa_nml['aorsa2din']['z5'] = round(self.species_charge[name]/proton_charge) 
+
+            elif i ==6:
+                self.aorsa_nml['aorsa2din']['ndisti6'] = self.species_ndist[name]
+                self.aorsa_nml['aorsa2din']['amu6'] = round(self.species_mass[name]/one_amu)
+                self.aorsa_nml['aorsa2din']['z6'] = round(self.species_charge[name]/proton_charge)
+
             # TODO: user can add up to 6 of these i think, check aorsa file 
     
     def set_noise_control(self, z2_electron=1, upshift=1, xkperp_cutoff=0.5, damping=100.0, delta0=4.0e-05):
