@@ -258,3 +258,9 @@ class CQL3D_Post_Process:
         if return_plot == True:
             return fig, axs
         fig.show()
+
+# next, add tools for pitch-integrating and comparing to maxwellian 
+# add tools for plotting powers vs rya
+
+# add tool for plotting eqdsk, rays, and harmonics from a genray run 
+
