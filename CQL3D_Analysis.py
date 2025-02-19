@@ -156,7 +156,7 @@ class CQL3D_Post_Process:
         rho_index,
         v_norm_over_v_max=0.015,
         log_scale_axis_multiple=1,
-        figsize=(10, 6),
+        figsize=(18, 6),
         cmap="viridis",
         num_energy_levels=6,
         energy_levels_linear=None,
@@ -164,6 +164,39 @@ class CQL3D_Post_Process:
         energy_color='red',
         return_plot=False,
     ):
+        """Makes a plot of the linear and log scale distrobution function for species gen_species_index
+        versus vperp and vparallel, normalized to vnorm. 
+
+        Parameters
+        ----------
+        gen_species_index : int
+            index of species s to plot
+        rho_index : int
+            index of the radial coordinate in rya array to plot
+        v_norm_over_v_max : float, optional
+            x and y v/vnorm scale maximum to plot, by default 0.015
+        log_scale_axis_multiple : int, optional
+            multiplier for log axis scales so more of the distrobution function is visable, by default 1
+        figsize : tuple, optional
+            figure size, by default (18, 6)
+        cmap : str, optional
+            color map, by default "viridis"
+        num_energy_levels : int, optional
+            number of energy levels to plot, by default 6
+        energy_levels_linear : list of floats, optional
+            if set, these keV energy values will be set on the linear plot, by default None
+        energy_levels_log : list of floats, optional
+            if set, these keV energy values will be set on the log plot, by default None
+        energy_color : str, optional
+            color of energy contours, by default 'red'
+        return_plot : bool, optional
+            if true, returns fig and axs objects for user manipulation, by default False
+
+        Returns
+        -------
+        matplotlib fig and ax objects
+            The fig and ax objects for user manual manipulation 
+        """
         f_s_rho, VPAR, VPERP = self.get_species_distrobution_function_at_rho(
             gen_species_index, rho_index
         )
@@ -178,7 +211,7 @@ class CQL3D_Post_Process:
         fig, axs = plt.subplots(1, 2, figsize=figsize)
 
         # linear scale subplot
-        axs[0].set_title(f"Distribution function at r = {self.rya[gen_species_index]}")
+        axs[0].set_title(f"Distribution function"+ r" at $\rho$"+ f" = {self.rya[gen_species_index]}")
         axs[0].set_aspect("equal")
         axs[0].set_xlabel("$v_\parallel / v_{norm}$")
         axs[0].set_ylabel("$v_\perp / v_{norm}$")
@@ -197,7 +230,7 @@ class CQL3D_Post_Process:
 
         # log10 scale subplot
         axs[1].set_title(
-            f"LOG10 Distribution function at r = {self.rya[gen_species_index]}"
+            f"LOG10 Distribution function"+ r" at $\rho$"+ f" = {self.rya[gen_species_index]}"
         )
         axs[1].set_aspect("equal")
         axs[1].set_xlabel("$v_\parallel / v_{norm}$")
