@@ -5,7 +5,7 @@ import matplotlib.tri as tri
 import f90nml as f90
 import os
 import meshio
-
+from plasma import equilibrium_process
 # import helpers for eqdsk processing
 import plasma
 
