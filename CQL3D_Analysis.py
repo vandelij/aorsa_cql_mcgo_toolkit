@@ -40,11 +40,11 @@ class CQL3D_Post_Process:
                 eqdsk_file, doplot=False
             )
 
-        self.R_wall = self.eqdsk["rlim"]
-        self.Z_wall = self.eqdsk["zlim"]
+            self.R_wall = self.eqdsk["rlim"]
+            self.Z_wall = self.eqdsk["zlim"]
 
-        self.R_lcfs = self.eqdsk["rbbbs"]
-        self.Z_lcfs = self.eqdsk["zbbbs"]
+            self.R_lcfs = self.eqdsk["rbbbs"]
+            self.Z_lcfs = self.eqdsk["zbbbs"]
 
         # read .nc file and create usfull data
         self.cql_nc = netCDF4.Dataset(self.cql3d_nc_file, "r")
