@@ -10,7 +10,7 @@ import matplotlib.colors as colors
 import matplotlib.cbook as cbook
 from matplotlib import cm
 from matplotlib import ticker, cm
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, RectBivariateSpline
 from scipy.optimize import curve_fit
 import os, sys
 import netCDF4
@@ -35,9 +35,10 @@ class CQL3D_Post_Process:
         self.cql_input_file = cql_input_file
 
         # load up eqdsk using john's methods
-        self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(
-            eqdsk_file, doplot=False
-        )
+        if eqdsk_file is not None:
+            self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(
+                eqdsk_file, doplot=False
+            )
 
         self.R_wall = self.eqdsk["rlim"]
         self.Z_wall = self.eqdsk["zlim"]
@@ -363,6 +364,7 @@ class CQL3D_Post_Process:
         figsize=(10, 10),
         log10=False,
         color="blue",
+        return_plot=False
     ):
         idx_max_kev = np.where(
             np.abs(self.enerkev - Emax_keV) == min(np.abs(self.enerkev - Emax_keV))
@@ -401,6 +403,10 @@ class CQL3D_Post_Process:
             + f" = {self.rya[rho_index]:.3f}",
             fontsize=15,
         )
+
+        if return_plot is not False:
+            return fig, ax
+        fig.show()
 
     def plot_pitch_integrated_distribution_function_versus_maxwellian(
         self,
@@ -479,7 +485,7 @@ class CQL3D_Post_Process:
         total_power_MW = np.trapz(power*dvols_m3) # total power delvered to gen species in MW
         return power, total_power_MW, self.rya 
     
-    def plot_powers_vs_rho(self, gen_species_index, power_types, time=-1, figsize=(10,5), colors=None):
+    def plot_powers_vs_rho(self, gen_species_index, power_types, time=-1, figsize=(10,5), colors=None, return_plot=False):
 
         fig, ax = plt.subplots(figsize=figsize)
         ax.grid()
@@ -494,6 +500,40 @@ class CQL3D_Post_Process:
         ax.legend()
 
         ax.set_title(f'Net Powers to Species {self.get_species_name(gen_species_index)}')
+
+        if return_plot == True:
+            return fig, ax
+
+
+    def plot_cyclotron_harmonics(self, frequency, harmonics, species_mass, species_charge, r_resolution, z_resolution,levels, figsize=(10,10), return_plot=False):
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # unpack the equilibrium magnetics 
+        
+        rgrid = self.eqdsk["rgrid"]
+        zgrid = self.eqdsk["zgrid"]
+        magAxisR = self.eqdsk['rmaxis'] 
+        magAxisZ = self.eqdsk['zmaxis'] 
+        B_zGrid = self.eqdsk["bzrz"]
+        B_TGrid = self.eqdsk["btrz"]
+        B_rGrid = self.eqdsk["brrz"]
+
+        # get the total feild strength 
+        Bstrength = np.sqrt(np.square(B_zGrid) + np.square(B_TGrid) + np.square(B_rGrid))
+
+        # get the poloidal field strength 
+        Bpstrength = np.sqrt(np.square(B_zGrid) + np.square(B_rGrid))
+        # getBpoloidal = interp2d(rgrid, zgrid, Bpstrength, kind = 'cubic')
+
+        # create a function that can grab the B-feild magnitude at any r, z coordiante pair. 
+        getBStrength = RectBivariateSpline(rgrid,zgrid,Bstrength, kind = 'cubic')
+
+        # plot the equilibrium
+        psizr = self.eqdsk["psizr"]
+        ax.axis("equal")
+        img = plt.contour(self.eqdsk["r"], self.eqdsk["z"], psizr.T, levels=levels)
+        plt.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="black", linewidth=3)
+        plt.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
 
 
 # next, add tools for pitch-integrating and comparing to maxwellian
