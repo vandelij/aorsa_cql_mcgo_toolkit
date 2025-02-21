@@ -27,12 +27,13 @@ class CQL3D_Post_Process:
     """
 
     def __init__(
-        self, cql3d_nc_file, cql3d_krf_file=None, eqdsk_file=None, cql_input_file=None
+        self, gen_species_names, cql3d_nc_file, cql3d_krf_file=None, eqdsk_file=None, cql_input_file=None
     ):
         self.cql3d_nc_file = cql3d_nc_file
         self.cql3d_krf_file = cql3d_krf_file
         self.eqdsk_file = eqdsk_file
         self.cql_input_file = cql_input_file
+        self.gen_species_names = gen_species_names
 
         # load up eqdsk using john's methods
         if eqdsk_file is not None:
@@ -315,7 +316,7 @@ class CQL3D_Post_Process:
 
         if return_plot == True:
             return fig, axs
-        fig.show()
+        plt.show()
 
     def integrate_distribution_over_pitch_angle(self, gen_species_index, rho_index):
         f_s_rho = self.get_species_distribution_function_at_rho(
@@ -337,6 +338,33 @@ class CQL3D_Post_Process:
         # should now be able to plot f_integrated_over_pitch vs self.enerkev to compare to a maxwellian distribution
 
         return f_integrated_over_pitch, self.enerkev
+    
+    def integrate_distribution_function_over_velocity_space(self, gen_species_index, rho_index):
+        f_integrated_over_pitch = self.integrate_distribution_over_pitch_angle(gen_species_index, rho_index)[0]
+        mass = self.cql_nc["fmass"][gen_species_index]/1000 # mass in grams
+        velocity_grid = np.sqrt(2 * self.enerkev * 1e3 * 1.6022e-19 / mass)  # m/s
+        density_per_m3 = np.trapz(f_integrated_over_pitch, velocity_grid)
+        return density_per_m3
+    
+    def get_density_profile(self, gen_species_index):
+        density = np.zeros_like(self.rya)
+        for i in range(self.rya.shape[0]):
+            density[i] = self.integrate_distribution_function_over_velocity_space(gen_species_index, i)
+        return density, self.rya
+
+    def plot_density_profile(self, gen_species_index, figsize=(10,5), color='red', return_plot=False):
+        fig, ax = plt.subplots(figsize=figsize)
+        density, rya = self.get_density_profile(gen_species_index)
+        ax.plot(rya, density, color=color)
+        ax.grid()
+        ax.set_xlabel(r'$\rho$', fontsize=15)
+        ax.set_ylabel(f'Density of species {self.get_species_name(gen_species_index)} '+r'[$m^{-3}$]', fontsize=15)
+        ax.tick_params(axis="x", labelsize=12)  # For x-axis tick labels
+        ax.tick_params(axis="y", labelsize=12)  # For y-axis tick labels
+        if return_plot:
+            return fig, ax
+        plt.show()
+
 
     def make_maxwellian_on_enerkev_grid(self, n, T, mass):
         v_array = np.sqrt(2 * self.enerkev * 1e3 * 1.6022e-19 / mass)  # m/s
@@ -353,7 +381,8 @@ class CQL3D_Post_Process:
         return maxwell_energy_distribution_function, self.enerkev
 
     def get_species_name(self, gen_species_index):
-        return self.cql_nc["kspeci"][:][gen_species_index][0][0].decode("utf-8")
+        return self.gen_species_names[gen_species_index]
+        
 
     def plot_pitch_integrated_distribution_function(
         self,
@@ -406,7 +435,7 @@ class CQL3D_Post_Process:
 
         if return_plot is not False:
             return fig, ax
-        fig.show()
+        plt.show()
 
     def plot_pitch_integrated_distribution_function_versus_maxwellian(
         self,
