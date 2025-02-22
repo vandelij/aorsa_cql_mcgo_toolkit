@@ -20,6 +20,9 @@ import f90nml as f90
 import plasma
 from plasma import equilibrium_process
 
+# import Grant's eqdsk processor for getting B info
+from process_eqdsk2 import getGfileDict
+
 
 class CQL3D_Post_Process:
     """
@@ -37,15 +40,7 @@ class CQL3D_Post_Process:
 
         # load up eqdsk using john's methods
         if eqdsk_file is not None:
-            self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(
-                eqdsk_file, doplot=False
-            )
-
-            self.R_wall = self.eqdsk["rlim"]
-            self.Z_wall = self.eqdsk["zlim"]
-
-            self.R_lcfs = self.eqdsk["rbbbs"]
-            self.Z_lcfs = self.eqdsk["zbbbs"]
+            self.process_eqdsk()
 
         # read .nc file and create usfull data
         self.cql_nc = netCDF4.Dataset(self.cql3d_nc_file, "r")
@@ -75,14 +70,47 @@ class CQL3D_Post_Process:
         self.power_type_map["Runaway losses"] = 8
         self.power_type_map["Synchrotron radiation losses"] = 9
 
-    def plot_equilibrium(self, figsize, levels):
+    def process_eqdsk(self):
+        # unpack the equilibrium magnetics 
+            self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(
+                self.eqdsk_file, doplot=False
+            )
+            self.eqdsk_with_B_info = getGfileDict(self.eqdsk_file)
+
+            rgrid = self.eqdsk_with_B_info["rgrid"]
+            zgrid = self.eqdsk_with_B_info["zgrid"]
+            self.R_wall = self.eqdsk["rlim"]
+            self.Z_wall = self.eqdsk["zlim"]
+
+            self.R_lcfs = self.eqdsk["rbbbs"]
+            self.Z_lcfs = self.eqdsk["zbbbs"]
+            B_zGrid = self.eqdsk_with_B_info["bzrz"]
+            B_TGrid = self.eqdsk_with_B_info["btrz"]
+            B_rGrid = self.eqdsk_with_B_info["brrz"]
+
+            # get the total feild strength 
+            Bstrength = np.sqrt(np.square(B_zGrid) + np.square(B_TGrid) + np.square(B_rGrid))
+
+            # create a function that can grab the B-feild magnitude at any r, z coordiante pair. 
+            self.getBStrength = RectBivariateSpline(rgrid, zgrid, Bstrength)
+
+
+    def plot_equilibrium(self, figsize, levels=10, return_plot=False):
+        fig, ax = plt.subplots(figsize=figsize)
         psizr = self.eqdsk["psizr"]
-        plt.figure(figsize=figsize)
-        plt.axis("equal")
-        img = plt.contour(self.eqdsk["r"], self.eqdsk["z"], psizr.T, levels=levels)
-        plt.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="black", linewidth=3)
-        plt.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
-        plt.colorbar(img)
+        psi_mag_axis = self.eqdsk["simag"]
+        psi_boundary = self.eqdsk["sibry"]
+    
+        ## THIS NEEDS TO BE TOROIDAL RHO
+        # normalize the psirz so that the norm is 1 on boundary and zero on axis 
+        psirzNorm = (psizr - psi_mag_axis)/(psi_boundary-psi_mag_axis) 
+        ax.axis("equal")
+        img = ax.contour(self.eqdsk["r"], self.eqdsk["z"], psirzNorm.T, levels=levels, colors='black')
+        ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="black", linewidth=3)
+        ax.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
+        if return_plot:
+            return fig, ax
+
         plt.show()
 
     def print_keys(self):
@@ -126,6 +154,9 @@ class CQL3D_Post_Process:
 
         # species masses
         self.species_mass = self.cql_nc.variables["fmass"][:] / 1000  # convert to kg
+
+        # species charges
+        self.species_charges = self.cql_nc["bnumb"][:].data*1.6022e-19
 
         # volume elements for each radial bin in cm^3
         self.dvols = self.cql_nc.variables['dvol'][:]
@@ -534,35 +565,39 @@ class CQL3D_Post_Process:
             return fig, ax
 
 
-    def plot_cyclotron_harmonics(self, frequency, harmonics, species_mass, species_charge, r_resolution, z_resolution,levels, figsize=(10,10), return_plot=False):
-        fig, ax = plt.subplots(figsize=figsize)
+    def plot_cyclotron_harmonics(self, frequency, harmonics, species_mass, species_charge, r_resolution, z_resolution, levels, figsize=(10,10), harmonic_color='blue', return_plot=False):
+        """    frequency: launched wave fequency [Hz]
+            harmonics: list of harmonics to plot (example: [1, 2, 3] will plot the 1st, second, and third cyclotron harmonics for species) 
+            r_resolution: number of radial points to search over per z coord to plot the harmonic
+            z_resolution: number of z coords. 
+    
+        """
 
-        # unpack the equilibrium magnetics 
-        
-        rgrid = self.eqdsk["rgrid"]
-        zgrid = self.eqdsk["zgrid"]
-        magAxisR = self.eqdsk['rmaxis'] 
-        magAxisZ = self.eqdsk['zmaxis'] 
-        B_zGrid = self.eqdsk["bzrz"]
-        B_TGrid = self.eqdsk["btrz"]
-        B_rGrid = self.eqdsk["brrz"]
 
-        # get the total feild strength 
-        Bstrength = np.sqrt(np.square(B_zGrid) + np.square(B_TGrid) + np.square(B_rGrid))
-
-        # get the poloidal field strength 
-        Bpstrength = np.sqrt(np.square(B_zGrid) + np.square(B_rGrid))
-        # getBpoloidal = interp2d(rgrid, zgrid, Bpstrength, kind = 'cubic')
-
-        # create a function that can grab the B-feild magnitude at any r, z coordiante pair. 
-        getBStrength = RectBivariateSpline(rgrid,zgrid,Bstrength, kind = 'cubic')
 
         # plot the equilibrium
-        psizr = self.eqdsk["psizr"]
-        ax.axis("equal")
-        img = plt.contour(self.eqdsk["r"], self.eqdsk["z"], psizr.T, levels=levels)
-        plt.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="black", linewidth=3)
-        plt.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
+        fig, ax = self.plot_equilibrium(figsize=figsize, levels=levels, return_plot=True)
+
+        # set up harmonics 
+        w_wave = frequency*2*np.pi
+        r_points = np.linspace(self.eqdsk_with_B_info["rgrid"][0], self.eqdsk_with_B_info["rgrid"][-1], r_resolution)
+        z_points = np.linspace(self.eqdsk_with_B_info["zgrid"][0], self.eqdsk_with_B_info["zgrid"][-1], z_resolution)
+        Bfield = self.getBStrength(r_points, z_points).T
+ 
+        omega_j = species_charge*Bfield/species_mass
+        print(np.max(omega_j))
+        normalized_w_wave = w_wave / omega_j
+        R, Z = np.meshgrid(r_points, z_points)
+        print(np.max(normalized_w_wave))
+        CS = ax.contour(R, Z, normalized_w_wave.T, levels=harmonics, colors=(harmonic_color,), linestyles=('--',))
+        labels = ax.clabel(CS, fmt = '%2.1d', colors = harmonic_color, fontsize=20)
+
+        for label in labels:
+            label.set_rotation(0)
+
+        if return_plot:
+            return fig, ax
+        plt.show()
 
 
 # next, add tools for pitch-integrating and comparing to maxwellian
