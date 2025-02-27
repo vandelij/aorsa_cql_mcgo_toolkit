@@ -10,7 +10,7 @@ import matplotlib.colors as colors
 import matplotlib.cbook as cbook
 from matplotlib import cm
 from matplotlib import ticker, cm
-from scipy.interpolate import interp1d, RectBivariateSpline
+from scipy.interpolate import interp1d, RectBivariateSpline, PchipInterpolator
 from scipy.optimize import curve_fit
 import os, sys
 import netCDF4
@@ -70,6 +70,9 @@ class CQL3D_Post_Process:
         self.power_type_map["Runaway losses"] = 8
         self.power_type_map["Synchrotron radiation losses"] = 9
 
+        # build interpolator dictunary
+        self.f_s_rho_interpolator = {}
+
     def process_eqdsk(self):
         # unpack the equilibrium magnetics 
             self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(
@@ -94,18 +97,27 @@ class CQL3D_Post_Process:
             # create a function that can grab the B-feild magnitude at any r, z coordiante pair. 
             self.getBStrength = RectBivariateSpline(rgrid, zgrid, Bstrength)
 
+            # create the normalized flux function #TODO confirm that the user is using this flux coord for mapping
+            psizr = self.eqdsk_with_B_info["psirz"]
+            psi_mag_axis = self.eqdsk_with_B_info["ssimag"]
+            psi_boundary = self.eqdsk_with_B_info["ssibry"]
+            self.psirzNorm = (psizr - psi_mag_axis)/(psi_boundary-psi_mag_axis) 
+            self.getpsirzNorm = RectBivariateSpline(rgrid, zgrid, self.psirzNorm)
+
 
     def plot_equilibrium(self, figsize, levels=10, return_plot=False):
         fig, ax = plt.subplots(figsize=figsize)
-        psizr = self.eqdsk["psizr"]
-        psi_mag_axis = self.eqdsk["simag"]
-        psi_boundary = self.eqdsk["sibry"]
+        # psizr = self.eqdsk["psizr"]
+        # psi_mag_axis = self.eqdsk["simag"]
+        # psi_boundary = self.eqdsk["sibry"]
     
-        ## THIS NEEDS TO BE TOROIDAL RHO
-        # normalize the psirz so that the norm is 1 on boundary and zero on axis 
-        psirzNorm = (psizr - psi_mag_axis)/(psi_boundary-psi_mag_axis) 
+        # ## THIS NEEDS TO BE TOROIDAL RHO
+        # # normalize the psirz so that the norm is 1 on boundary and zero on axis 
+        # psirzNorm = (psizr - psi_mag_axis)/(psi_boundary-psi_mag_axis) 
+        # ax.axis("equal")
+        # # img = ax.contour(self.eqdsk["r"], self.eqdsk["z"], psirzNorm.T, levels=levels, colors='black')
         ax.axis("equal")
-        img = ax.contour(self.eqdsk["r"], self.eqdsk["z"], psirzNorm.T, levels=levels, colors='black')
+        img = ax.contour(self.eqdsk_with_B_info["rgrid"], self.eqdsk_with_B_info["zgrid"], self.psirzNorm, levels=levels, colors='black')
         ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="black", linewidth=3)
         ax.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
         if return_plot:
@@ -207,6 +219,41 @@ class CQL3D_Post_Process:
         #         f:units = "vnorm**3/(cm**3*(cm/sec)**3)" ;
         #         f:comment = "Additional dimension added for multi-species" ;
 
+    def build_species_distribution_function_interpolator_matrix(self, gen_species_index):
+        #interpolator_mesh = [[0]*self.normalizedVel.shape[0]]*(self.pitchAngleMesh[0, :].shape[0]) # list with shape len(x), len(y)
+        interpolator_mesh = [[0] * self.pitchAngleMesh[0, :].shape[0] for _ in range(self.normalizedVel.shape[0])]
+        # loop through and load up with interpoltors 
+        for ix in range(self.normalizedVel.shape[0]):
+            print(f"{ix / self.normalizedVel.shape[0]*100:.2f} Percent Cmoplete")
+            for iy in range(self.pitchAngleMesh[0, :].shape[0]):
+                f_s_all_rho = self.f[gen_species_index, :, ix, iy]
+                interpolator_mesh[ix][iy] = PchipInterpolator(self.rya, f_s_all_rho)
+
+        self.f_s_rho_interpolator[f"Species {gen_species_index}"] = interpolator_mesh
+    
+    def get_species_distribution_function_at_arbitrary_rho(self, gen_species_index, rho):
+        if not (f"Species {gen_species_index}" in self.f_s_rho_interpolator):
+            self.build_species_distribution_function_interpolator_matrix(gen_species_index)
+
+        interpolator_mesh = self.f_s_rho_interpolator[f"Species {gen_species_index}"]
+
+        f_s_rho = np.zeros_like(self.f[0, 0, :, :])
+
+        for ix in range(self.normalizedVel.shape[0]):
+            for iy in range(self.pitchAngleMesh[0,:].shape[0]):
+                f_s_rho[ix, iy] = interpolator_mesh[ix][iy](rho) # interpolate to the rho we are at
+
+
+        # grab and create velocity-pitch angle mesh. for now, just use the closest rho pitch angle mesh.
+        rho_index_nearest = self.get_rho_index(rho)
+        V, THETA = np.meshgrid(
+            self.normalizedVel, self.pitchAngleMesh[rho_index_nearest, :], indexing="ij"
+        )
+        VPAR = V * np.cos(THETA)
+        VPERP = V * np.sin(THETA)
+
+        return (f_s_rho, VPAR, VPERP)
+
     def plot_species_distribution_function_at_rho(
         self,
         gen_species_index,
@@ -220,6 +267,8 @@ class CQL3D_Post_Process:
         energy_levels_log=None,
         energy_color="red",
         return_plot=False,
+        use_interpolated_rho=False,
+        rho_to_interpolate_to=None
     ):
         """Makes a plot of the linear and log scale distribution function for species gen_species_index
         versus vperp and vparallel, normalized to vnorm.
@@ -254,9 +303,14 @@ class CQL3D_Post_Process:
         matplotlib fig and ax objects
             The fig and ax objects for user manual manipulation
         """
-        f_s_rho, VPAR, VPERP = self.get_species_distribution_function_at_rho(
-            gen_species_index, rho_index
-        )
+        if use_interpolated_rho==False:
+            f_s_rho, VPAR, VPERP = self.get_species_distribution_function_at_rho(
+                gen_species_index, rho_index
+            )
+        else:
+            f_s_rho, VPAR, VPERP = self.get_species_distribution_function_at_arbitrary_rho(gen_species_index, rho=rho_to_interpolate_to)
+            
+
 
         # calculate energy in keV of the ions
         mass_ion = self.species_mass[gen_species_index]
@@ -283,11 +337,19 @@ class CQL3D_Post_Process:
         fig, axs = plt.subplots(1, 2, figsize=figsize)
 
         # linear scale subplot
-        axs[0].set_title(
-            f"Distribution function"
-            + r" at $\rho$"
-            + f" = {self.rya[rho_index]:.3f} for Species {self.get_species_name(gen_species_index)}"
-        )
+        if use_interpolated_rho==False:
+            axs[0].set_title(
+                f"Distribution function"
+                + r" at $\rho$"
+                + f" = {self.rya[rho_index]:.3f} for Species {self.get_species_name(gen_species_index)}"
+            )
+        else:
+            axs[0].set_title(
+                f"Distribution function (interpolated)"
+                + r" at $\rho$"
+                + f" = {rho_to_interpolate_to:.3f} for Species {self.get_species_name(gen_species_index)}"
+            )    
+
         axs[0].set_aspect("equal")
         axs[0].set_xlabel("$v_\parallel / v_{norm}$")
         axs[0].set_ylabel("$v_\perp / v_{norm}$")
@@ -311,11 +373,19 @@ class CQL3D_Post_Process:
         )
 
         # log10 scale subplot
-        axs[1].set_title(
-            f"LOG10 Distribution function"
-            + r" at $\rho$"
-            + f" = {self.rya[rho_index]:.3f} for Species {self.get_species_name(gen_species_index)}"
-        )
+        if use_interpolated_rho==False:
+            axs[1].set_title(
+                f"LOG10 Distribution function"
+                + r" at $\rho$"
+                + f" = {self.rya[rho_index]:.3f} for Species {self.get_species_name(gen_species_index)}"
+            )
+        else:
+            axs[1].set_title(
+                f"LOG10 Distribution function (interpolated)"
+                + r" at $\rho$"
+                + f" = {rho_to_interpolate_to:.3f} for Species {self.get_species_name(gen_species_index)}"
+            )
+
         axs[1].set_aspect("equal")
         axs[1].set_xlabel("$v_\parallel / v_{norm}$")
         axs[1].set_ylabel("$v_\perp / v_{norm}$")
@@ -598,6 +668,11 @@ class CQL3D_Post_Process:
         if return_plot:
             return fig, ax
         plt.show()
+
+    def map_distribution_function_to_RZ(self, r, z):
+        B_local = self.getBStrength(r,z)
+        psiNorm_local = self.getpsirzNorm(r,z)
+        rho = psiNorm_local # TODO again, confirm that this is true i.e. cql3d used this psi.
 
 
 # next, add tools for pitch-integrating and comparing to maxwellian
