@@ -459,6 +459,7 @@ class CQL3D_Post_Process:
         figsize=(18, 6),
         cmap="viridis",
         num_energy_levels=6,
+        num_f_levels=400,
         energy_levels_linear=None,
         energy_levels_log=None,
         energy_color="red",
@@ -544,7 +545,7 @@ class CQL3D_Post_Process:
         axs[0].set_ylabel("$v_\perp / v_{norm}$")
         axs[0].set_xlim([-v_norm_over_v_max, v_norm_over_v_max])
         axs[0].set_ylim([0, v_norm_over_v_max])
-        c1 = axs[0].contourf(VPAR, VPERP, f_s_rho, levels=400, cmap=cmap)
+        c1 = axs[0].contourf(VPAR, VPERP, f_s_rho, levels=num_f_levels, cmap=cmap)
         if energy_levels_linear == None:
             contour_lines1 = axs[0].contour(
                 VPAR, VPERP, E_ion, levels=levels_linear_E, colors=energy_color
@@ -590,7 +591,7 @@ class CQL3D_Post_Process:
         axs[1].clabel(
             contour_lines2, inline=True, fontsize=8, fmt=lambda x: f"{x:.1f} [keV]"
         )
-        c2 = axs[1].contourf(VPAR, VPERP, np.log10(f_s_rho + 1), levels=400, cmap=cmap)
+        c2 = axs[1].contourf(VPAR, VPERP, np.log10(f_s_rho + 1), levels=num_f_levels, cmap=cmap)
         fig.colorbar(
             c2,
             ax=axs[1],
