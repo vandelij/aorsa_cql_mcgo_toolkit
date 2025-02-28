@@ -463,7 +463,8 @@ class CQL3D_Post_Process:
         energy_levels_log=None,
         energy_color="red",
         return_plot=False,
-        plot_f_s_0=False
+        plot_f_s_0=False,
+        plot_mask=False
     ):
         """Makes a plot of the linear and log scale distribution function for species gen_species_index
         versus vperp and vparallel, normalized to vnorm.
@@ -501,9 +502,11 @@ class CQL3D_Post_Process:
             The fig and ax objects for user manual manipulation
         """
 
-        f_s_rho, VPAR, VPERP, rho, f_s_0 = self.map_distribution_function_to_RZ(gen_species_index=gen_species_index, r=R, z=Z)
+        f_s_rho, VPAR, VPERP, rho, f_s_0, mask = self.map_distribution_function_to_RZ(gen_species_index=gen_species_index, r=R, z=Z)
         if plot_f_s_0 == True:
             f_s_rho = f_s_0
+        if plot_f_s_0 and plot_mask:
+            f_s_rho = np.ma.array(f_s_rho, mask=mask)
         # calculate energy in keV of the ions
         mass_ion = self.species_mass[gen_species_index]
         E_ion = (
@@ -936,6 +939,9 @@ class CQL3D_Post_Process:
         # grab the outboard midplane magnetic field magnitude on the flux surface
         B0 = self.B_midplane_mag_interpolator(rho)
         mass_ion = self.species_mass[gen_species_index]
+
+        # temporary mask to see which original location didnt make it
+        mask = 0.5*mass_ion*VPERP0**2 * (B_local/B0) > 0.5*mass_ion*(VPAR0**2 + VPERP0**2) 
         print("rho: ", rho)
         print("B_local", B_local)
         print("B0: ", B0)
@@ -944,6 +950,7 @@ class CQL3D_Post_Process:
         # particles conserve kinetic energy and magnetic moment. Loop through the VPERP, VPERA mesh and build out f_s.
         # loop through and load up with interpoltors
         zero_counter = 0
+        max_theta0 = 0
         for ix in range(self.normalizedVel.shape[0]):
             print(f"{ix / self.normalizedVel.shape[0]*100:.2f} Percent Complete")
             for iy in range(self.pitchAngleMesh[0, :].shape[0]): # TODO assume pitch angle mesh is contant sized 
@@ -955,15 +962,19 @@ class CQL3D_Post_Process:
                 #print('theta:', theta)
                 #print('argument:', np.sqrt(B_ratio * np.sin(theta)**2))
                 theta0 = np.arcsin(np.sqrt(B_ratio * np.sin(theta)**2))
-                iy_new = np.where((self.pitchAngleMesh[0, iy] - theta0) == min(self.pitchAngleMesh[0, iy] - theta0))[0][0] # for now no interpolation. Just grab nearest grid point
+                if theta0 > max_theta0:
+                    max_theta0 = theta0
+                iy_new = np.where((self.pitchAngleMesh[0, :] - theta0) == min(self.pitchAngleMesh[0, :] - theta0))[0][0] # for now no interpolation. Just grab nearest grid point
                 # check if mu conservation means the phase space element should be empty
+                #print(f'theta:{theta}|theta0:{theta0}')
                 if mu*B_local > 0.5 * mass_ion * u0**2:
                     f_s[ix, iy] = 0
                     zero_counter += 1
                 else:
                     f_s[ix, iy] = f_s_0[ix, iy_new]
         print('zeros_counter: ', zero_counter)
-        return (f_s, VPAR0, VPERP0, rho, f_s_0)
+        print(f'Maximum theta0: {max_theta0}')
+        return (f_s, VPAR0, VPERP0, rho, f_s_0, mask)
                 
 
 
