@@ -961,15 +961,15 @@ class CQL3D_Post_Process:
                 u0 = vovervnorm
                 #print('theta:', theta)
                 #print('argument:', np.sqrt(B_ratio * np.sin(theta)**2))
-                theta0 = np.arcsin(np.sqrt(B_ratio * np.sin(theta)**2))
-                iy_new = np.where((self.pitchAngleMesh[0, :] - theta0) == min(self.pitchAngleMesh[0, :] - theta0))[0][0] # for now no interpolation. Just grab nearest grid point
+                theta0 = np.arcsin(np.sqrt(B_ratio * np.sin(theta)**2))[0]
+                iy_new = np.where(np.abs(self.pitchAngleMesh[0, :] - theta0) == np.min(np.abs(self.pitchAngleMesh[0, :] - theta0)))[0][0] # for now no interpolation. Just grab nearest grid point
                 # check if mu conservation means the phase space element should be empty
                 #print(f'theta:{theta}|theta0:{theta0}')
-                if mu*B_local > 0.5 * mass_ion * u0**2:
-                    f_s[ix, iy] = 0
-                    zero_counter += 1
-                else:
-                    f_s[ix, iy] = f_s_0[ix, iy_new] 
+                # if mu*B_local > 0.5 * mass_ion * u0**2:
+                #     f_s[ix, iy] = 0
+                #     zero_counter += 1
+                # else:
+                f_s[ix, iy] = f_s_0[ix, iy_new] 
                 if iy_new > max_iy_new:
                     max_iy_new = iy_new
         print('zeros_counter: ', zero_counter)
