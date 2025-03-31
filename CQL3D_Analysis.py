@@ -930,7 +930,7 @@ class CQL3D_Post_Process:
         )  # TODO again, confirm that this is true i.e. cql3d used this psi.
 
         # grab the distribution function at the outboard midplane, and the corrisponding vperp and vparallel.
-        f_s_0, VPAR0, VPERP0 = self.get_species_distribution_function_at_arbitrary_rho(
+        f_s_0, VPAR, VPERP = self.get_species_distribution_function_at_arbitrary_rho(
             gen_species_index=gen_species_index, rho=rho
         )
 
@@ -942,7 +942,7 @@ class CQL3D_Post_Process:
         mass_ion = self.species_mass[gen_species_index]
 
         # temporary mask to see which original location didnt make it
-        mask = 0.5*mass_ion*VPERP0**2 * (B_local/B0) > 0.5*mass_ion*(VPAR0**2 + VPERP0**2) 
+        mask = 0.5*mass_ion*VPERP**2 * (B_local/B0) > 0.5*mass_ion*(VPAR**2 + VPERP**2) 
         print("rho: ", rho.item())
         print("B_local", B_local.item())
         print("B0: ", B0.item())
@@ -955,14 +955,17 @@ class CQL3D_Post_Process:
         for ix in range(self.normalizedVel.shape[0]):
             #print(f"{ix / self.normalizedVel.shape[0]*100:.2f} Percent Complete")
             for iy in range(self.pitchAngleMesh[0, :].shape[0]): # TODO assume pitch angle mesh is contant sized 
-                # calculate magnetic moment and energy for this index at outboard midplane 
-                mu = 0.5*mass_ion * VPERP0[ix, iy]**2 / B0
                 theta = self.pitchAngleMesh[0, iy]
                 vovervnorm = self.normalizedVel[ix]
-                u0 = vovervnorm
+                vpar = VPAR[ix,iy] # get the local vparallel to check its sign
                 #print('theta:', theta)
                 #print('argument:', np.sqrt(B_ratio * np.sin(theta)**2))
                 theta0 = np.arcsin(np.sqrt(B_ratio * np.sin(theta)**2))[0]
+                
+                # theta0 is in range (0, pi/2). Need to check sign of v|| to extend to (0, pi)
+                if vpar < 0:
+                    theta0 = np.pi - theta0
+
                 iy_new = np.where(np.abs(self.pitchAngleMesh[0, :] - theta0) == np.min(np.abs(self.pitchAngleMesh[0, :] - theta0)))[0][0] # for now no interpolation. Just grab nearest grid point
                 # check if mu conservation means the phase space element should be empty
                 #print(f'theta:{theta}|theta0:{theta0}')
@@ -975,7 +978,7 @@ class CQL3D_Post_Process:
                     max_iy_new = iy_new
         print('zeros_counter: ', zero_counter)
         print(f'max iy_new: {max_iy_new}, pitcheAngle(max_iy_new): {self.pitchAngleMesh[0,max_iy_new]*180/np.pi} deg')
-        return (f_s, VPAR0, VPERP0, rho, f_s_0, mask)
+        return (f_s, VPAR, VPERP, rho, f_s_0, mask)
                 
 
 
