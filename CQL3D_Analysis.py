@@ -363,6 +363,7 @@ class CQL3D_Post_Process:
         figsize=(10, 10),
         log10=False,
         color="blue",
+        return_plot=False
     ):
         idx_max_kev = np.where(
             np.abs(self.enerkev - Emax_keV) == min(np.abs(self.enerkev - Emax_keV))
@@ -401,6 +402,8 @@ class CQL3D_Post_Process:
             + f" = {self.rya[rho_index]:.3f}",
             fontsize=15,
         )
+        if return_plot:
+            return fig, ax
 
     def plot_pitch_integrated_distribution_function_versus_maxwellian(
         self,
@@ -479,7 +482,7 @@ class CQL3D_Post_Process:
         total_power_MW = np.trapz(power*dvols_m3) # total power delvered to gen species in MW
         return power, total_power_MW, self.rya 
     
-    def plot_powers_vs_rho(self, gen_species_index, power_types, time=-1, figsize=(10,5), colors=None):
+    def plot_powers_vs_rho(self, gen_species_index, power_types, time=-1, figsize=(10,5), colors=None, return_plot=False):
 
         fig, ax = plt.subplots(figsize=figsize)
         ax.grid()
@@ -494,6 +497,22 @@ class CQL3D_Post_Process:
         ax.legend()
 
         ax.set_title(f'Net Powers to Species {self.get_species_name(gen_species_index)}')
+        if return_plot:
+            return fig, ax
+    
+    def get_fusion_rate_vs_rho(self, rxn_idx):
+        '''
+        return the fusion rate as a function of radius for given reaction
+        index:
+            - 0: T(d,n)He4
+            - 1: He3(d,p)He4
+            - 2: D(d,p)T
+            - 3: D(d,n)He3
+            - 4: 'hydrogenic impact ionization rate'
+            - 5: 'charge exchange'
+        '''
+        fusion_rates = self.cql_nc.variables['fuspwrv'][:]
+        return fusion_rates[rxn_idx, :], self.rya
 
 
 # next, add tools for pitch-integrating and comparing to maxwellian
