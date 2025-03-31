@@ -986,6 +986,61 @@ class CQL3D_Post_Process:
         '''
         fusion_rates = self.cql_nc.variables['fuspwrv'][:]
         return fusion_rates[rxn_idx, :], self.rya
+    
+    def add_gen_species_dim_to_1_gen_species_case(self, outfile_path='genspecies_dim_added.nc'):
+        cql_nc_new = netCDF4.Dataset(outfile_path, 'w')
+
+
+        # Copy dimensions from the original file
+        for name, dimension in self.cql_nc.dimensions.items():
+            cql_nc_new.createDimension(name, len(dimension) if not dimension.isunlimited() else None)
+
+        for name, variable in self.cql_nc.variables.items():
+            # extend the dimensions of the variables that aorsa expects to have a species dim
+            if name == 'f' and self.cql_nc.dimensions['gen_species_dim'].size == 1:
+                # update the dims
+                list_dims = list(variable.dimensions)
+                list_dims.insert(0, 'gen_species_dim')
+                tuple_dims = tuple(list_dims)
+
+                new_var = cql_nc_new.createVariable(name, variable.dtype, tuple_dims)
+
+                # add the variable 
+                new_var.setncatts(self.cql_nc.variables[name].__dict__)
+                new_var[:] = np.expand_dims(self.cql_nc.variables[name][:], 0)
+
+
+            elif name == 'wpar' and self.cql_nc.dimensions['gen_species_dim'].size == 1:
+                # update the dims
+                list_dims = list(variable.dimensions)
+                list_dims.insert(1, 'gen_species_dim')
+                tuple_dims = tuple(list_dims)
+
+                new_var = cql_nc_new.createVariable(name, variable.dtype, tuple_dims)
+
+                # add the variable 
+                new_var.setncatts(self.cql_nc.variables[name].__dict__)
+                new_var[:] = np.expand_dims(self.cql_nc.variables[name][:], 1)
+
+            elif name == 'wperp' and self.cql_nc.dimensions['gen_species_dim'].size == 1:
+                # update the dims
+                list_dims = list(variable.dimensions)
+                list_dims.insert(1, 'gen_species_dim')
+                tuple_dims = tuple(list_dims)
+
+                new_var = cql_nc_new.createVariable(name, variable.dtype, tuple_dims)
+
+                # add the variable 
+                new_var.setncatts(self.cql_nc.variables[name].__dict__)
+                new_var[:] = np.expand_dims(self.cql_nc.variables[name][:], 1)
+
+            else:
+                new_var = cql_nc_new.createVariable(name, variable.dtype, variable.dimensions)
+                new_var.setncatts(self.cql_nc.variables[name].__dict__)
+                new_var[:] = self.cql_nc.variables[name][:]
+
+
+        cql_nc_new.close()
 
 
 # next, add tools for pitch-integrating and comparing to maxwellian
