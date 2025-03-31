@@ -727,6 +727,8 @@ class CQL3D_Post_Process:
             + f" = {self.rya[rho_index]:.3f}",
             fontsize=15,
         )
+        if return_plot:
+            return fig, ax
 
         if return_plot is not False:
             return fig, ax
@@ -807,26 +809,14 @@ class CQL3D_Post_Process:
 
     def get_power_vs_rho(self, gen_species_index, power_type, time=-1):
 
-        # see self.power_type_map for available power types
-        # units are W/cm^3 or equivilantly MW/m^3.
-        power = self.cql_nc.variables["powers"][
-            time, gen_species_index, self.power_type_map[power_type], :
-        ]
-        dvols_m3 = self.dvols * (1 / 100) ** 3  # convert volume elements to m^3
-        total_power_MW = np.trapz(
-            power * dvols_m3
-        )  # total power delvered to gen species in MW
-        return power, total_power_MW, self.rya
-
-    def plot_powers_vs_rho(
-        self,
-        gen_species_index,
-        power_types,
-        time=-1,
-        figsize=(10, 5),
-        colors=None,
-        return_plot=False,
-    ):
+        # see self.power_type_map for available power types 
+        # units are W/cm^3 or equivilantly MW/m^3. 
+        power = self.cql_nc.variables['powers'][time, gen_species_index, self.power_type_map[power_type], :]
+        dvols_m3 = self.dvols*(1/100)**3 # convert volume elements to m^3
+        total_power_MW = np.trapz(power*dvols_m3) # total power delvered to gen species in MW
+        return power, total_power_MW, self.rya 
+    
+    def plot_powers_vs_rho(self, gen_species_index, power_types, time=-1, figsize=(10,5), colors=None, return_plot=False):
 
         fig, ax = plt.subplots(figsize=figsize)
         ax.grid()
@@ -980,6 +970,22 @@ class CQL3D_Post_Process:
         print(f'max iy_new: {max_iy_new}, pitcheAngle(max_iy_new): {self.pitchAngleMesh[0,max_iy_new]*180/np.pi} deg')
         return (f_s, VPAR, VPERP, rho, f_s_0, mask)
                 
+        if return_plot:
+            return fig, ax
+    
+    def get_fusion_rate_vs_rho(self, rxn_idx):
+        '''
+        return the fusion rate as a function of radius for given reaction
+        index:
+            - 0: T(d,n)He4
+            - 1: He3(d,p)He4
+            - 2: D(d,p)T
+            - 3: D(d,n)He3
+            - 4: 'hydrogenic impact ionization rate'
+            - 5: 'charge exchange'
+        '''
+        fusion_rates = self.cql_nc.variables['fuspwrv'][:]
+        return fusion_rates[rxn_idx, :], self.rya
 
 
 # next, add tools for pitch-integrating and comparing to maxwellian
