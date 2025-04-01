@@ -3,6 +3,7 @@ import os
 import subprocess
 import time 
 import re
+import netCDF4
 
 
 #################### USER SETTINGS #####################
@@ -88,6 +89,37 @@ def wait_for_job(job_id):
             break
         time.sleep(wait_time)  # Wait for 10 seconds before checking again
 
+# helper function for parsing cqlinput file 
+def edit_cql3d_input(file_path_in, file_path_out, params, new_values):
+    with open(file_path_in, 'r') as f:
+        lines = f.readlines()
+
+    updated_lines = []
+    line_num = 0
+
+    for line in lines:
+        match_found = False
+        for i in range(len(params)):
+            param = params[i]
+            new_value = new_values[i]
+            # Match parameter lines, handling both numerical and string values (quoted or unquoted)
+            match = re.match(rf'(\s*{param}\s*=\s*)(["\']?)([^"\']*)(["\']?)(\s*!.*)?', line)
+            if match:
+                match_found = True
+                # Preserve quotes if they existed; otherwise, insert quotes for string values
+                quote = '"' if match.group(2) or match.group(4) else ''
+                new_line = f"{match.group(1)}{quote}{new_value}{quote}{match.group(5) or ''}\n"
+                updated_lines.append(new_line)
+                print(line_num)
+
+        if match_found == False: # only append the lines if the line wasnt already
+            updated_lines.append(line)
+        line_num += 1
+
+    with open(file_path_out, 'w') as f:
+        f.writelines(updated_lines)
+
+
 # define two functions which handle the actual modification and exicution of aorsa and cql3d.
 def cql3d_iteration_i(i):
     cql3d_dir = super_directory + f"/cql3d_iteration_{i}"
@@ -97,19 +129,95 @@ def cql3d_iteration_i(i):
     # if i != 0, also copy over cql3d.nc from the previous cql run and set nlrestart to "enabled" to read it in. 
     # be cautious of overwriting it? maybe copy it twice with two names, nmuonic can maybe be cql3d_i.nc? 
     # # also, if i != 0, set rdcmod=format1, rdcfile='du0u0_input_1', rfread=text, 
+    if i != 0:
+        # copy over cql3d.nc from previous cql run and QL diffusion file from previous aorsa run
+        previous_cql_dir = super_directory + f"/cql3d_iteration_{i-1}"
+        previous_aorsa_dir = super_directory + f"/aorsa_iteration_{i-1}"
+
+        os.system(f"cp {previous_cql_dir}/cql3d.nc .")
+        os.system(f"cp {previous_aorsa_dir}/out_cql3d.coef1 du0u0_input_1")
+
+        # convert the input file for restart and RF from QL diffusion
+        print('Converting existing cqlinput for restart and RF QL diffusion...')
+        edit_cql3d_input(file_path_in='cqlinput', file_path_out='cqlinput', params=['nlrestrt', 'rdcmod'], new_values=['ncdfdist','format1'])
+        print('Done.')
+        
 
     job_id = submit_job(slurm_command_string=run_cql3d, directory=cql3d_dir) # call the slurm job 
     print(f"CQL3D iteration {i} job {job_id} submitted from {cql3d_dir}, waiting for completion...")
     wait_for_job(job_id)
     print(f"CQL3D iteration {i} job {job_id} completed!")
 
+# helper function for converting cql3d.nc files with 1 general species so aorsa can read them by giving them a gen_species index to f, wpar, wperp 
+def add_gen_species_dim_to_cql_nc(input_nc_file, output_nc_file):
+    cql_nc_new = netCDF4.Dataset(output_nc_file, 'w')
+    cql_nc = netCDF4.Dataset(input_nc_file, "r")
+
+    # Copy dimensions from the original file
+    for name, dimension in cql_nc.dimensions.items():
+        cql_nc_new.createDimension(name, len(dimension) if not dimension.isunlimited() else None)
+
+    for name, variable in cql_nc.variables.items():
+        # extend the dimensions of the variables that aorsa expects to have a species dim
+        if name == 'f' and cql_nc.dimensions['gen_species_dim'].size == 1:
+            # update the dims
+            list_dims = list(variable.dimensions)
+            list_dims.insert(0, 'gen_species_dim')
+            tuple_dims = tuple(list_dims)
+
+            new_var = cql_nc_new.createVariable(name, variable.dtype, tuple_dims)
+
+            # add the variable 
+            new_var.setncatts(cql_nc.variables[name].__dict__)
+            new_var[:] = np.expand_dims(cql_nc.variables[name][:], 0)
+
+
+        elif name == 'wpar' and cql_nc.dimensions['gen_species_dim'].size == 1:
+            # update the dims
+            list_dims = list(variable.dimensions)
+            list_dims.insert(1, 'gen_species_dim')
+            tuple_dims = tuple(list_dims)
+
+            new_var = cql_nc_new.createVariable(name, variable.dtype, tuple_dims)
+
+            # add the variable 
+            new_var.setncatts(cql_nc.variables[name].__dict__)
+            new_var[:] = np.expand_dims(cql_nc.variables[name][:], 1)
+
+        elif name == 'wperp' and cql_nc.dimensions['gen_species_dim'].size == 1:
+            # update the dims
+            list_dims = list(variable.dimensions)
+            list_dims.insert(1, 'gen_species_dim')
+            tuple_dims = tuple(list_dims)
+
+            new_var = cql_nc_new.createVariable(name, variable.dtype, tuple_dims)
+
+            # add the variable 
+            new_var.setncatts(cql_nc.variables[name].__dict__)
+            new_var[:] = np.expand_dims(cql_nc.variables[name][:], 1)
+
+        else:
+            new_var = cql_nc_new.createVariable(name, variable.dtype, variable.dimensions)
+            new_var.setncatts(cql_nc.variables[name].__dict__)
+            new_var[:] = cql_nc.variables[name][:]
+
+
+    cql_nc_new.close()
 
 def aorsa_iteration_i(i):
     aorsa_dir = super_directory + f"/aorsa_iteration_{i}"
     os.chdir(aorsa_dir)
     # copy over previous cql iteration cql3d.nc as cql3d.nc.i and cql3d.nc, and set netCDF_file1 = 'cql3d.nc'
     # enorm_factor= 0.0 allegedly forces cql3d and aorsa to have the same enorm 
-    # set ndist1 = 1 for nonmaxwellian ions 
+    # set ndist1 = 1 for nonmaxwellian ions, also need to convert cql3d.nc to the version where f is indexed by gen_species
+
+    previous_cql_dir =  super_directory + f"/cql3d_iteration_{i}"
+    os.system(f"cp {previous_cql_dir}/cql3d.nc cql3d_{i}.nc")
+
+    # now convert the cql3d.nc to f indexed by gen species. 
+    print(f'Converting cql3d_{i}.nc to cql3d.nc with added species dim...')
+    add_gen_species_dim_to_cql_nc(input_nc_file=f"cql3d_{i}.nc", output_nc_file="cql3d.nc")
+    print('Done.')
 
     job_id = submit_job(slurm_command_string=run_aorsa, directory=aorsa_dir) # call the slurm job 
     print(f"AORSA iteration {i} job {job_id} submitted from {aorsa_dir}, waiting for completion...")
