@@ -9,7 +9,7 @@ import netCDF4
 #################### USER SETTINGS #####################
 # Directory Setup (use absolute paths)
 
-# The head directory in which the results are stored. lots of data. 
+# The head directory in which the results are stored. lots of data, recommend pscratch. 
 super_directory = "/pscratch/sd/v/vandelij/iterate_test_paredown/"
 
 # The eqdsk path. Wilkl be copied and renamed eqdsk into the run dirs
@@ -24,7 +24,7 @@ cql3d_clone_directory = "/global/cfs/cdirs/m77/jacob_van_de_Lindt/aorsa_cql_iter
 # Simulation settings
 num_iterations = 2
 
-wait_time = 20 # time in secnods to wait in each loop after a job is submitted. 
+wait_time = 20 # time in seconds to wait in each loop after a job is submitted. 
 
 # command to run the local cql3d slurm file
 run_cql3d = "sbatch cql3d_slurm"
@@ -41,7 +41,7 @@ def ensure_and_change_directory(path):
 def build_file_structure(num_iterations):
     for i in range(num_iterations):
         os.chdir(super_directory)
-        # set up cql directories. Special i = 0 case handled later when building the input files
+        # set up cql directories. i != 0 case setup handled later when building the input files
         cql3d_dir = super_directory + f"/cql3d_iteration_{i}"
         ensure_and_change_directory(cql3d_dir)
         # copy over required files
@@ -215,7 +215,7 @@ def aorsa_iteration_i(i):
     os.system(f"cp {previous_cql_dir}/cql3d.nc cql3d_{i}.nc")
 
     # now convert the cql3d.nc to f indexed by gen species. 
-    print(f'Converting cql3d_{i}.nc to cql3d.nc with added species dim...')
+    print(f'Converting cql3d_{i}.nc to cql3d.nc with added gen species dim...')
     add_gen_species_dim_to_cql_nc(input_nc_file=f"cql3d_{i}.nc", output_nc_file="cql3d.nc")
     print('Done.')
 
@@ -235,7 +235,7 @@ if __name__ == "__main__":
         cql3d_iteration_i(i=i_iter)
         aorsa_iteration_i(i=i_iter)
     
-    print(f'Finished {num_iterations} cql3d/aorsa2d iterations.')
+    print(f'Finished {num_iterations} cql3d/aorsa2d iterations. Iteration files saved to {super_directory}')
 
 
 
