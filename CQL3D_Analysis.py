@@ -15,6 +15,9 @@ from scipy.optimize import curve_fit
 import os, sys
 import netCDF4
 import f90nml as f90
+from matplotlib.collections import LineCollection
+from matplotlib.font_manager import FontProperties
+from matplotlib.ticker import FormatStrFormatter, FuncFormatter
 
 # import John's toolkit area
 import plasma
@@ -111,7 +114,7 @@ class CQL3D_Post_Process:
         self.psirzNorm = (psizr - psi_mag_axis) / (psi_boundary - psi_mag_axis)
         self.getpsirzNorm = RectBivariateSpline(rgrid, zgrid, self.psirzNorm.T)
 
-    def plot_equilibrium(self, figsize, levels=10, return_plot=False):
+    def plot_equilibrium(self, figsize, levels=10, fontsize=14, return_plot=False):
         fig, ax = plt.subplots(figsize=figsize)
         # psizr = self.eqdsk["psizr"]
         # psi_mag_axis = self.eqdsk["simag"]
@@ -130,8 +133,19 @@ class CQL3D_Post_Process:
             levels=levels,
             colors="black",
         )
-        ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="black", linewidth=3)
+        ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="red", linewidth=3)
         ax.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
+        font = FontProperties(size=fontsize)
+        formatter = FuncFormatter(lambda x, _: f'{x:.1f}')
+        ax.xaxis.set_major_formatter(formatter)
+        ax.yaxis.set_major_formatter(formatter)  # If you want y-axis too
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(fontsize)
+
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(fontsize)
+        ax.set_xlabel('R [m]', font=font)
+        ax.set_ylabel('Z [m]', font=font)
         if return_plot:
             return fig, ax
 
@@ -829,7 +843,7 @@ class CQL3D_Post_Process:
                 power,
                 color=color,
                 label=f"Power Type: {power_type} \n"
-                + f"Total: {total_power_MW:.2f} MW",
+                + f"Total: {total_power_MW:.3f} MW",
             )
 
         ax.set_xlabel(r"$\rho$", fontsize=15)
@@ -854,8 +868,11 @@ class CQL3D_Post_Process:
         r_resolution,
         z_resolution,
         levels,
+        fontsize=14,
         figsize=(10, 10),
         harmonic_color="blue",
+        plot_rays=False,
+        maxDelPwrPlot=0.85,
         return_plot=False,
     ):
         """frequency: launched wave fequency [Hz]
@@ -867,7 +884,7 @@ class CQL3D_Post_Process:
 
         # plot the equilibrium
         fig, ax = self.plot_equilibrium(
-            figsize=figsize, levels=levels, return_plot=True
+            figsize=figsize, levels=levels, fontsize=fontsize, return_plot=True
         )
 
         # set up harmonics
@@ -902,9 +919,60 @@ class CQL3D_Post_Process:
         for label in labels:
             label.set_rotation(0)
 
+        if plot_rays: 
+            self.plot_rays(ax,maxDelPwrPlot)
+
         if return_plot:
             return fig, ax
         plt.show()
+
+    #returns the index of the array whose element is closest to value
+    def findNearestIndex(self, value, array):
+        idx = (np.abs(array - value)).argmin()
+
+        return idx
+
+    #adds the ray traces to ax
+    def plot_rays(self, ax, maxDelPwrPlot=0.85):
+        xlim = self.eqdsk_with_B_info["xlim"] #R points of the wall
+        ylim = self.eqdsk_with_B_info["ylim"] #Z points of the wall
+
+        new_array = np.zeros((xlim.shape[0], 3))
+        new_array[:, 0] = xlim
+        new_array[:, 1] = ylim
+        
+        wr  = self.cqlrf_nc.variables["wr"][:] #major radius of the ray at each point along the trace
+        wz  = self.cqlrf_nc.variables["wz"][:] #height of the ray at each point along the trace
+        delpwr= self.cqlrf_nc.variables["delpwr"][:] #power in the ray at each point
+        wr *= .01; wz*=.01 #convert to m from cm
+
+        norm = plt.Normalize(0, 1)
+
+        #plot the ray using a LineCollection which allows the colormap to be applied to each ray
+        for ray in range(len(wr)):
+            delpwr[ray,:] = delpwr[ray,:]/delpwr[ray,0] #normalize the ray power to that ray's starting power
+            mostPowerDep = self.findNearestIndex(1 - maxDelPwrPlot, delpwr[ray]) #find the index of the last ray point we want to plot
+
+            
+            points = np.array([wr[ray][:mostPowerDep], wz[ray][:mostPowerDep]]).T.reshape(-1, 1, 2)
+            segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+            # Create a continuous norm to map from data points to colors
+            lc = LineCollection(segments, norm = norm,cmap=plt.cm.jet)
+            # Set the values used for colormapping
+            lc.set_array(delpwr[ray][:mostPowerDep])
+            lc.set_linewidth(1)
+            ax.add_collection(lc)
+
+
+
+        #ax.set_title(f"Plotting Rays until {(maxDelPwrPlot) * 100} %\n ray power deposition")
+        #ax.set_aspect('equal')
+        #ax.set_ylim(-1.4, 1.4)
+        #drawFluxSurfaces(ax, levels)
+        #plotCyclotronHarmonics(ax, frequency, harmonics, species, r_resolution, z_resolution)
+        #ax.legend()
+
 
     def build_B_midplane_mag_interpolator(self):
 
