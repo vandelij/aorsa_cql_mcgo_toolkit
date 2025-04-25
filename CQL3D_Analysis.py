@@ -26,9 +26,6 @@ from plasma import equilibrium_process
 # import Grant's eqdsk processor for getting B info
 from process_eqdsk2 import getGfileDict
 
-# import Grant's eqdsk processor for getting B info
-from process_eqdsk2 import getGfileDict
-
 
 class CQL3D_Post_Process:
     """
@@ -994,68 +991,6 @@ class CQL3D_Post_Process:
         self.B_midplane_mag_interpolator = PchipInterpolator(
             self.rya, self.Bmidplane_tesla
         )
-
-    def map_distribution_function_to_RZ(self, gen_species_index, r, z):
-        B_local = self.getBStrength(r, z)
-        psiNorm_local = self.getpsirzNorm(r, z)
-        rho = np.sqrt(
-            psiNorm_local
-        )  # TODO again, confirm that this is true i.e. cql3d used this psi.
-
-        # grab the distribution function at the outboard midplane, and the corrisponding vperp and vparallel.
-        f_s_0, VPAR, VPERP = self.get_species_distribution_function_at_arbitrary_rho(
-            gen_species_index=gen_species_index, rho=rho
-        )
-
-        # initialize the local distribution function
-        f_s = np.zeros_like(f_s_0)
-
-        # grab the outboard midplane magnetic field magnitude on the flux surface
-        B0 = self.B_midplane_mag_interpolator(rho)
-        mass_ion = self.species_mass[gen_species_index]
-
-        # temporary mask to see which original location didnt make it
-        mask = 0.5*mass_ion*VPERP**2 * (B_local/B0) > 0.5*mass_ion*(VPAR**2 + VPERP**2) 
-        print("rho: ", rho.item())
-        print("B_local", B_local.item())
-        print("B0: ", B0.item())
-        B_ratio = B0 / B_local # this is always < 1. 
-        print('B_ratio:', B_ratio.item())
-        # particles conserve kinetic energy and magnetic moment. Loop through the VPERP, VPERA mesh and build out f_s.
-        # loop through and load up with interpoltors
-        zero_counter = 0
-        max_iy_new = 0
-        for ix in range(self.normalizedVel.shape[0]):
-            #print(f"{ix / self.normalizedVel.shape[0]*100:.2f} Percent Complete")
-            for iy in range(self.pitchAngleMesh[0, :].shape[0]): # TODO assume pitch angle mesh is contant sized 
-                theta = self.pitchAngleMesh[0, iy]
-                vovervnorm = self.normalizedVel[ix]
-                vpar = VPAR[ix,iy] # get the local vparallel to check its sign
-                #print('theta:', theta)
-                #print('argument:', np.sqrt(B_ratio * np.sin(theta)**2))
-                theta0 = np.arcsin(np.sqrt(B_ratio * np.sin(theta)**2))[0]
-                
-                # theta0 is in range (0, pi/2). Need to check sign of v|| to extend to (0, pi)
-                if vpar < 0:
-                    theta0 = np.pi - theta0
-
-                iy_new = np.where(np.abs(self.pitchAngleMesh[0, :] - theta0) == np.min(np.abs(self.pitchAngleMesh[0, :] - theta0)))[0][0] # for now no interpolation. Just grab nearest grid point
-                # check if mu conservation means the phase space element should be empty
-                #print(f'theta:{theta}|theta0:{theta0}')
-                # if mu*B_local > 0.5 * mass_ion * u0**2:
-                #     f_s[ix, iy] = 0
-                #     zero_counter += 1
-                # else:
-                f_s[ix, iy] = f_s_0[ix, iy_new] 
-                if iy_new > max_iy_new:
-                    max_iy_new = iy_new
-        print('zeros_counter: ', zero_counter)
-        print(f'max iy_new: {max_iy_new}, pitcheAngle(max_iy_new): {self.pitchAngleMesh[0,max_iy_new]*180/np.pi} deg')
-        return (f_s, VPAR, VPERP, rho, f_s_0, mask)
-                
-        if return_plot:
-            return fig, ax
-        plt.show()
 
     #returns the index of the array whose element is closest to value
     def findNearestIndex(self, value, array):
