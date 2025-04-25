@@ -130,29 +130,29 @@ def readGEQDSK(filename='eqdsk.dat', dointerior=False, doplot=None, width=9, dol
 
     for i in n.arange ( nW ) : 
     
-        fpol[i] = dataStr[n.cast['int'](i+20)]
-        pres[i] = dataStr[n.cast['int'](i+20+nW)]
-        ffprim[i] = dataStr[n.cast['int'](i+20+2*nW)]
-        pprime[i] = dataStr[n.cast['int'](i+20+3*nW)]
-        qpsi[i] = dataStr[n.cast['int'](i+20+4*nW+nW*nH)]
+        fpol[i] = dataStr[int(i+20)]
+        pres[i] = dataStr[int(i+20+nW)]
+        ffprim[i] = dataStr[int(i+20+2*nW)]
+        pprime[i] = dataStr[int(i+20+3*nW)]
+        qpsi[i] = dataStr[int(i+20+4*nW+nW*nH)]
 
     if dodebug: print('one D arrays: ', fpol[-1],pres[-1], ffprim[-1], pprime[-1], qpsi[-1] )
     for i in n.arange ( nbbbs ) :
     
-        rbbbs[i]    = dataStr[n.cast['int'](i*2+20+5*nW+nW*nH)]
-        zbbbs[i]    = dataStr[n.cast['int'](i*2+1+20+5*nW+nW*nH)]
+        rbbbs[i]    = dataStr[int(i*2+20+5*nW+nW*nH)]
+        zbbbs[i]    = dataStr[int(i*2+1+20+5*nW+nW*nH)]
   
 
     for i in n.arange ( limitr ) :
        
-        rlim[i] = dataStr[n.cast['int'](i*2+20+5*nW+nW*nH+2*nbbbs)] 
-        zlim[i] = dataStr[n.cast['int'](i*2+1+20+5*nW+nW*nH+2*nbbbs)] 
+        rlim[i] = dataStr[int(i*2+20+5*nW+nW*nH+2*nbbbs)] 
+        zlim[i] = dataStr[int(i*2+1+20+5*nW+nW*nH+2*nbbbs)] 
 
 #   2D array
 
     for i in n.arange ( nW ) :
         for j in n.arange ( nH ) :
-            psizr[i,j] = dataStr[n.cast['int'](i+20+4*nW+j*nW)]
+            psizr[i,j] = dataStr[int(i+20+4*nW+j*nW)]
 
     rStep   = rdim / ( nW - 1 )
     zStep   = zdim / ( nH - 1 )
