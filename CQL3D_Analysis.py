@@ -18,7 +18,7 @@ import f90nml as f90
 from matplotlib.collections import LineCollection
 from matplotlib.font_manager import FontProperties
 from matplotlib.ticker import FormatStrFormatter, FuncFormatter
-
+from progress.bar import Bar
 # import John's toolkit area
 import plasma
 from plasma import equilibrium_process
@@ -29,7 +29,7 @@ from process_eqdsk2 import getGfileDict
 
 class CQL3D_Post_Process:
     """
-    Class to post-process the various output files from an Aorsa run
+    Class to post-process the various output files from a CQL3D run
     """
 
     def __init__(
@@ -139,11 +139,10 @@ class CQL3D_Post_Process:
         formatter = FuncFormatter(lambda x, _: f'{x:.1f}')
         ax.xaxis.set_major_formatter(formatter)
         ax.yaxis.set_major_formatter(formatter)  # If you want y-axis too
-        for tick in ax.xaxis.get_major_ticks():
-            tick.label.set_fontsize(fontsize)
+        # Use tick_params to set font size for tick labels
+        ax.tick_params(axis='x', labelsize=fontsize)
+        ax.tick_params(axis='y', labelsize=fontsize)
 
-        for tick in ax.yaxis.get_major_ticks():
-            tick.label.set_fontsize(fontsize)
         ax.set_xlabel('R [m]', font=font)
         ax.set_ylabel('Z [m]', font=font)
         if return_plot:
@@ -153,7 +152,7 @@ class CQL3D_Post_Process:
 
     def print_keys(self):
         print("The cql3d.nc file has keys")
-        print(self.cql_nc.keys())
+        print(self.cql_nc.variables.keys())
         if self.cql3d_krf_file != None:
             print("\n The cql3d_krf.nc file has keys")
             print(self.cqlrf.keys())
@@ -260,12 +259,14 @@ class CQL3D_Post_Process:
             for _ in range(self.normalizedVel.shape[0])
         ]
         # loop through and load up with interpoltors
+        bar = Bar('Building Interpolators', max=self.normalizedVel.shape[0])
         for ix in range(self.normalizedVel.shape[0]):
-            print(f"{ix / self.normalizedVel.shape[0]*100:.2f} Percent Complete")
+            #print(f"{ix / self.normalizedVel.shape[0]*100:.2f} Percent Complete")
+            bar.next()
             for iy in range(self.pitchAngleMesh[0, :].shape[0]):
                 f_s_all_rho = self.f[gen_species_index, :, ix, iy]
                 interpolator_mesh[ix][iy] = PchipInterpolator(self.rya, f_s_all_rho)
-
+        bar.finish()
         self.f_s_rho_interpolator[f"Species {gen_species_index}"] = interpolator_mesh
 
     def get_species_distribution_function_at_arbitrary_rho(
@@ -986,12 +987,10 @@ class CQL3D_Post_Process:
         rho = np.sqrt(
             psiNorm_local
         )  # TODO again, confirm that this is true i.e. cql3d used this psi.
-
         # grab the distribution function at the outboard midplane, and the corrisponding vperp and vparallel.
         f_s_0, VPAR, VPERP = self.get_species_distribution_function_at_arbitrary_rho(
             gen_species_index=gen_species_index, rho=rho
         )
-
         # initialize the local distribution function
         f_s = np.zeros_like(f_s_0)
 
@@ -1010,7 +1009,9 @@ class CQL3D_Post_Process:
         # loop through and load up with interpoltors
         zero_counter = 0
         max_iy_new = 0
+        bar = Bar('Mapping distribution function from rho = %.4f to (r,z) = (%.4f, %.4f)' % (rho, r, z), max=self.normalizedVel.shape[0])
         for ix in range(self.normalizedVel.shape[0]):
+            bar.next()
             #print(f"{ix / self.normalizedVel.shape[0]*100:.2f} Percent Complete")
             for iy in range(self.pitchAngleMesh[0, :].shape[0]): # TODO assume pitch angle mesh is contant sized 
                 theta = self.pitchAngleMesh[0, iy]
@@ -1034,12 +1035,50 @@ class CQL3D_Post_Process:
                 f_s[ix, iy] = f_s_0[ix, iy_new] 
                 if iy_new > max_iy_new:
                     max_iy_new = iy_new
+        bar.finish()
         print('zeros_counter: ', zero_counter)
         print(f'max iy_new: {max_iy_new}, pitcheAngle(max_iy_new): {self.pitchAngleMesh[0,max_iy_new]*180/np.pi} deg')
         return (f_s, VPAR, VPERP, rho, f_s_0, mask)
                 
-        if return_plot:
-            return fig, ax
+    def build_4d_distribution(self, gen_species_index, points):
+        """
+        Builds a 4D phase space distribution function for a species at a set of specified (R, Z) points.
+
+        Parameters
+        ----------
+        gen_species_index : int
+            Index of the general species.
+        points : list of tuples
+            List of (R, Z) points where the distribution function is to be evaluated.
+
+        Returns
+        -------
+        f_s_4d : np.ndarray
+            4D phase matrix for the distribution function.
+        points : list of tuples
+            List of (R, Z) points where the distribution function is evaluated.
+        VPAR : np.ndarray
+            Parallel velocity mesh grid un normalized back into m/s
+        VPERP : np.ndarray
+            Perpendicular velocity mesh grid
+        """
+        print(f"Building 4D phase matrix for {self.gen_species_names[gen_species_index]} for {len(points)} points...")
+        # Pre-allocate the array with the correct shape
+        num_points = len(points)
+        f_s_4d = np.zeros((num_points, self.normalizedVel.shape[0], self.pitchAngleMesh[0, :].shape[0]))
+
+        # Iterate over the list of (R, Z) points
+        #bar = Bar('Building 4D phase matrix', max=num_points)
+        for i, (R, Z) in enumerate(points):
+            print(f"\nProcessing point {i+1}/{num_points}: (R={R}, Z={Z})")
+            f_s, VPAR, VPERP, _, _, _ = self.map_distribution_function_to_RZ(
+                gen_species_index=gen_species_index, r=R, z=Z
+            )
+            f_s_4d[i, :, :] = f_s 
+        VPAR *= self.vnorm_m_per_second # convert to m/s
+        VPERP *= self.vnorm_m_per_second # convert to m/s
+
+        return f_s_4d, points, VPAR, VPERP #VPAR and VPERP are the same for all points, right?????
     
     def get_fusion_rate_vs_rho(self, rxn_idx):
         '''
