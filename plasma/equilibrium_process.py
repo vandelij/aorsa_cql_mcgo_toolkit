@@ -73,6 +73,7 @@ def readGEQDSK(filename='eqdsk.dat', dointerior=False, doplot=None, width=9, dol
     dataStr     = valuesRE.findall ( data )
     headerStr   = headerRE.findall ( data )
     bbbStr  = bbbsRE.findall ( data )
+    print(bbbStr)
 
     file.close ()
     if len(bbbStr) > 0:

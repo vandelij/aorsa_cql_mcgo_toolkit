@@ -13,10 +13,12 @@ import CQL3D_Analysis
 
 #cql_nc_new = netCDF4.Dataset('/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/test.nc', 'w')
 eqdsk_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/g147634.04525"
-cql3d_nc_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/cql3d1gen.nc"
+#cql3d_nc_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/cql3d1gen.nc"
+cql3d_nc_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/iterations_scripts/cql3d.nc"
 cql3d_krf_nc_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/cql3d_krf001.nc"
 cqlin_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/cqlinput"
 
+output_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/iterations_scripts/cql3d_p.nc"
 # cql_pp = CQL3D_Analysis.CQL3D_Post_Process(
 #     gen_species_names=["D", "e"],
 #     cql3d_nc_file=cql3d_nc_file,
@@ -84,4 +86,4 @@ def add_gen_species_dim_to_cql_nc(input_nc_file, output_nc_file):
 
     cql_nc_new.close()
 
-add_gen_species_dim_to_cql_nc(input_nc_file=cql3d_nc_file, output_nc_file='/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/test3.nc')
+add_gen_species_dim_to_cql_nc(input_nc_file=cql3d_nc_file, output_nc_file=output_file)

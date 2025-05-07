@@ -114,7 +114,7 @@ class CQL3D_Post_Process:
         self.psirzNorm = (psizr - psi_mag_axis) / (psi_boundary - psi_mag_axis)
         self.getpsirzNorm = RectBivariateSpline(rgrid, zgrid, self.psirzNorm.T)
 
-    def plot_equilibrium(self, figsize, levels=10, fontsize=14, return_plot=False):
+    def plot_equilibrium(self, figsize, levels=10, fontsize=20, return_plot=False):
         fig, ax = plt.subplots(figsize=figsize)
         # psizr = self.eqdsk["psizr"]
         # psi_mag_axis = self.eqdsk["simag"]
@@ -296,6 +296,38 @@ class CQL3D_Post_Process:
 
         return (f_s_rho, VPAR, VPERP)
 
+    def cal_max_B_on_flux_surface(self, rho, tol=1e-3):
+        rho_target = rho
+        Rmax = self.eqdsk['rmaxis']
+        Rmin = min(self.eqdsk['rlim'])
+        Zcentr = self.eqdsk['zmaxis']
+
+        R = (Rmin+Rmax)/2
+        rho_guess = np.sqrt(float(self.getpsirzNorm(R, Zcentr)))
+        tola = np.abs(rho_target - rho_guess) / rho_target
+        ticker = 0
+        while tola > tol:
+            if rho_guess >= rho_target:
+                Rmin = R
+                R = (Rmin+Rmax)/2
+                rho_guess = np.sqrt(float(self.getpsirzNorm(R, Zcentr)))
+            else:
+                Rmax = R
+                R = (Rmin+Rmax)/2
+                rho_guess = np.sqrt(float(self.getpsirzNorm(R, Zcentr)))
+
+            tola = np.abs(rho_target - rho_guess) / rho_target
+            ticker += 1
+            if ticker > 3000:
+                print('Did not converge in 3000 iterations')
+                break
+            # print(f'tola: {tola}') 
+            # print(f'rho_guess: ', rho_guess, 'rho_target: ', rho_target)              
+
+        Bmax = float(self.getBStrength(R, Zcentr))
+        return Bmax, R, Zcentr, rho_guess
+    
+
     def plot_species_distribution_function_at_rho(
         self,
         gen_species_index,
@@ -311,6 +343,7 @@ class CQL3D_Post_Process:
         return_plot=False,
         use_interpolated_rho=False,
         rho_to_interpolate_to=None,
+        plot_trapped_passing=False,
     ):
         """Makes a plot of the linear and log scale distribution function for species gen_species_index
         versus vperp and vparallel, normalized to vnorm.
@@ -458,6 +491,22 @@ class CQL3D_Post_Process:
             ax=axs[1],
             label=r"LOG10($f_s$+1) [$\frac{v_{norm}^3}{(cm^3*(cm/sec)^3)}$]",
         )
+        if use_interpolated_rho == False:
+            rho = self.rya[rho_index]
+        else:
+            rho=rho_to_interpolate_to
+ 
+        if plot_trapped_passing:
+            B_pi = self.cal_max_B_on_flux_surface(rho, tol=1e-3)[0]
+            B0 = self.B_midplane_mag_interpolator(rho) 
+            dB = (B_pi - B0) / B0
+            slope = np.sqrt(1/dB)
+            axs[0].axline( (0,0), None, slope=slope, color='r', linestyle='--') 
+            axs[0].axline( (0,0), None, slope=-slope, color='r', linestyle='--')
+            axs[1].axline( (0,0), None, slope=slope, color='r', linestyle='--') 
+            axs[1].axline( (0,0), None, slope=-slope, color='r', linestyle='--')
+
+            
 
         if return_plot == True:
             return fig, axs
@@ -873,7 +922,11 @@ class CQL3D_Post_Process:
         harmonic_color="blue",
         plot_rays=False,
         maxDelPwrPlot=0.85,
+        specified_final_index=False, 
+        specified_final_index_value=-1,
         return_plot=False,
+        xticks=[1.0, 1.4, 1.8, 2.2],
+        skip_ray=[]
     ):
         """frequency: launched wave fequency [Hz]
         harmonics: list of harmonics to plot (example: [1, 2, 3] will plot the 1st, second, and third cyclotron harmonics for species)
@@ -886,7 +939,7 @@ class CQL3D_Post_Process:
         fig, ax = self.plot_equilibrium(
             figsize=figsize, levels=levels, fontsize=fontsize, return_plot=True
         )
-
+        ax.set_xticks(xticks)
         # set up harmonics
         w_wave = frequency * 2 * np.pi
         r_points = np.linspace(
@@ -902,10 +955,10 @@ class CQL3D_Post_Process:
         Bfield = self.getBStrength(r_points, z_points)
 
         omega_j = species_charge * Bfield / species_mass
-        print(np.max(omega_j))
+        #print(np.max(omega_j))
         normalized_w_wave = w_wave / omega_j
         R, Z = np.meshgrid(r_points, z_points)
-        print(np.max(normalized_w_wave))
+        #print(np.max(normalized_w_wave))
         CS = ax.contour(
             R,
             Z,
@@ -920,7 +973,10 @@ class CQL3D_Post_Process:
             label.set_rotation(0)
 
         if plot_rays: 
-            self.plot_rays(ax,maxDelPwrPlot)
+            if specified_final_index:
+                self.plot_rays(ax,maxDelPwrPlot, specified_final_index=True, specified_final_index_value=specified_final_index_value, skip_ray=skip_ray)
+            else:
+                self.plot_rays(ax,maxDelPwrPlot)
 
         if return_plot:
             return fig, ax
@@ -933,7 +989,7 @@ class CQL3D_Post_Process:
         return idx
 
     #adds the ray traces to ax
-    def plot_rays(self, ax, maxDelPwrPlot=0.85):
+    def plot_rays(self, ax, maxDelPwrPlot=0.85, specified_final_index=False, specified_final_index_value=-1, skip_ray=[]):
         xlim = self.eqdsk_with_B_info["xlim"] #R points of the wall
         ylim = self.eqdsk_with_B_info["ylim"] #Z points of the wall
 
@@ -950,19 +1006,22 @@ class CQL3D_Post_Process:
 
         #plot the ray using a LineCollection which allows the colormap to be applied to each ray
         for ray in range(len(wr)):
-            delpwr[ray,:] = delpwr[ray,:]/delpwr[ray,0] #normalize the ray power to that ray's starting power
-            mostPowerDep = self.findNearestIndex(1 - maxDelPwrPlot, delpwr[ray]) #find the index of the last ray point we want to plot
+            if ray not in skip_ray:
+                delpwr[ray,:] = delpwr[ray,:]/delpwr[ray,0] #normalize the ray power to that ray's starting power
+                if specified_final_index:
+                    mostPowerDep = specified_final_index_value
+                else:
+                    mostPowerDep = self.findNearestIndex(1 - maxDelPwrPlot, delpwr[ray]) #find the index of the last ray point we want to plot
 
-            
-            points = np.array([wr[ray][:mostPowerDep], wz[ray][:mostPowerDep]]).T.reshape(-1, 1, 2)
-            segments = np.concatenate([points[:-1], points[1:]], axis=1)
-
-            # Create a continuous norm to map from data points to colors
-            lc = LineCollection(segments, norm = norm,cmap=plt.cm.jet)
-            # Set the values used for colormapping
-            lc.set_array(delpwr[ray][:mostPowerDep])
-            lc.set_linewidth(1)
-            ax.add_collection(lc)
+                
+                points = np.array([wr[ray][:mostPowerDep], wz[ray][:mostPowerDep]]).T.reshape(-1, 1, 2)
+                segments = np.concatenate([points[:-1], points[1:]], axis=1)
+                # Create a continuous norm to map from data points to colors
+                lc = LineCollection(segments, norm = norm,cmap=plt.cm.jet)
+                # Set the values used for colormapping
+                lc.set_array(delpwr[ray][:mostPowerDep])
+                lc.set_linewidth(1)
+                ax.add_collection(lc)
 
 
 
