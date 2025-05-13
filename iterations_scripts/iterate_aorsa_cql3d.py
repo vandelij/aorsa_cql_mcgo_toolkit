@@ -22,15 +22,13 @@ aorsa_clone_directory = "/global/cfs/cdirs/m77/jacob_van_de_Lindt/aorsa_cql_iter
 cql3d_clone_directory = "/global/cfs/cdirs/m77/jacob_van_de_Lindt/aorsa_cql_iterate_templates_new/cql3d_1gen/"
 
 # Simulation settings
-num_iterations = 2
-
-wait_time = 20 # time in seconds to wait in each loop after a job is submitted. 
+num_iterations = 2 
 
 # command to run the local cql3d slurm file
-run_cql3d = "sbatch cql3d_slurm"
+run_cql3d = "srun -n 60 --cpu-bind=cores -c 4 /global/common/software/atom/perlmutter/binaries/cql3d/default/xcql3d_mpi.perlmutter > log.cql3d 2>&1"
 
-# command to run the local aorsa slurm file
-run_aorsa = "sbatch aorsa_slurm"
+# command to launch aorsa
+run_aorsa = "srun -n 1024 --cpu-bind=cores -c 2 /global/homes/v/vandelij/xaorsa2d_jacob_sam_john_feature_merge_3_kspecifix_HFS > log.aorsa 2>&1"
 
 def ensure_and_change_directory(path):
     if not os.path.exists(path):  # Check if the directory exists
@@ -46,7 +44,6 @@ def build_file_structure(num_iterations):
         ensure_and_change_directory(cql3d_dir)
         # copy over required files
         os.system(f"cp {eqdsk_path} eqdsk")
-        os.system(f"cp {cql3d_clone_directory}/cql3d_slurm .")
         os.system(f"cp {cql3d_clone_directory}/cqlinput .")
         
 
@@ -58,7 +55,6 @@ def build_file_structure(num_iterations):
         ensure_and_change_directory(aorsa_dir)
         # copy over required files 
         os.system(f"cp {eqdsk_path} eqdsk")
-        os.system(f"cp {aorsa_clone_directory}/aorsa_slurm .")
         os.system(f"cp {aorsa_clone_directory}/aorsa2d.in .")
         os.system(f"cp {aorsa_clone_directory}/Ztable .")
         os.system(f"cp {aorsa_clone_directory}/ZTABLE.TXT .")
@@ -68,26 +64,16 @@ def build_file_structure(num_iterations):
     print('Done setting up directories.')
 
 
-# define two functions which submit jobs, capture output job id, and wait for completion of slurm job
+# define function which submits jobs
 def submit_job(slurm_command_string, directory):
-    """Submits the job using sbatch and returns the job ID."""
-    result = subprocess.run(slurm_command_string, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, shell=True, cwd=directory)
-    output = result.stdout.strip()
+    """Submits the job using sbatch"""
+    # wait a little bit for cp to finish executing
+    os.sync()
+    time.sleep(5)
 
-    # Extract job ID from sbatch output (e.g., "Submitted batch job 123456")
-    match = re.search(r"Submitted batch job (\d+)", output)
-    if match:
-        return match.group(1)
-    else:
-        raise RuntimeError("Failed to get job ID from sbatch output:\n" + output)
+    # now, call the subprocess. This is blocking. 
+    subprocess.run(slurm_command_string, shell=True, cwd=directory)
 
-def wait_for_job(job_id):
-    """Waits for the Slurm job to complete by checking squeue."""
-    while True:
-        result = subprocess.run(["squeue", "-j", job_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        if job_id not in result.stdout:  # Job has finished
-            break
-        time.sleep(wait_time)  # Wait for 10 seconds before checking again
 
 # helper function for parsing cqlinput file 
 def edit_cql3d_input(file_path_in, file_path_out, params, new_values):
@@ -125,7 +111,7 @@ def cql3d_iteration_i(i):
     cql3d_dir = super_directory + f"/cql3d_iteration_{i}"
     os.chdir(cql3d_dir) # this should already exist from the build_file_structure function
     
-    # TODO add functionality to copy over out_coef1 over from aorsa i-1 if i != 0 as du0u01 (TODO make sure grid is correct), else just run on NBI
+    # TODO... done. add functionality to copy over out_coef1 over from aorsa i-1 if i != 0 as du0u01 (TODO make sure grid is correct), else just run on NBI
     # if i != 0, also copy over cql3d.nc from the previous cql run and set nlrestart to "enabled" to read it in. 
     # be cautious of overwriting it? maybe copy it twice with two names, nmuonic can maybe be cql3d_i.nc? 
     # # also, if i != 0, set rdcmod=format1, rdcfile='du0u0_input_1', rfread=text, 
@@ -142,11 +128,10 @@ def cql3d_iteration_i(i):
         edit_cql3d_input(file_path_in='cqlinput', file_path_out='cqlinput', params=['nlrestrt', 'rdcmod'], new_values=['ncdfdist','format1'])
         print('Done.')
         
+    print(f"Submitting CQL3D iteration {i} from {cql3d_dir}, waiting for completion...")
+    submit_job(slurm_command_string=run_cql3d, directory=cql3d_dir) # call the slurm job 
 
-    job_id = submit_job(slurm_command_string=run_cql3d, directory=cql3d_dir) # call the slurm job 
-    print(f"CQL3D iteration {i} job {job_id} submitted from {cql3d_dir}, waiting for completion...")
-    wait_for_job(job_id)
-    print(f"CQL3D iteration {i} job {job_id} completed!")
+    print(f"CQL3D iteration {i} completed!")
 
 # helper function for converting cql3d.nc files with 1 general species so aorsa can read them by giving them a gen_species index to f, wpar, wperp 
 def add_gen_species_dim_to_cql_nc(input_nc_file, output_nc_file):
@@ -219,10 +204,9 @@ def aorsa_iteration_i(i):
     add_gen_species_dim_to_cql_nc(input_nc_file=f"cql3d_{i}.nc", output_nc_file="cql3d.nc")
     print('Done.')
 
-    job_id = submit_job(slurm_command_string=run_aorsa, directory=aorsa_dir) # call the slurm job 
-    print(f"AORSA iteration {i} job {job_id} submitted from {aorsa_dir}, waiting for completion...")
-    wait_for_job(job_id)
-    print(f"AORSA iteration {i} job {job_id} completed!")
+    print(f"Submitting AORSA iteration {i} from {aorsa_dir}, waiting for completion...")
+    submit_job(slurm_command_string=run_aorsa, directory=aorsa_dir) # call the slurm job 
+    print(f"AORSA iteration {i} completed!")
 
 # run the code
 if __name__ == "__main__":
