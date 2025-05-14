@@ -415,10 +415,11 @@ class Aorsa_Post_Process():
             return fig, ax
         
         plt.show()
+        plt.close()
     
     def get_multifile_sum(self, key):
         if self.is_iterable(self.vtk_file):
-            sum_mat = self.mesh[0].point_data[key][:,0]
+            sum_mat = self.mesh[0].point_data[key][:,0].copy()
 
             for i in range(1,len(self.mesh)):
                 sum_mat += self.mesh[i].point_data[key][:,0]
@@ -482,6 +483,7 @@ class Aorsa_Post_Process():
         if return_plot:
             return fig, axs
         plt.plot()
+        #plt.close()
         
     def plot_species_absorption(self, figsize, return_fig=False):
         ion_names = self.aorsanml['STATE']['S_S_NAME'][1:]
@@ -556,3 +558,4 @@ class Aorsa_Post_Process():
             return fig, axs
 
         plt.show()
+        plt.close()
