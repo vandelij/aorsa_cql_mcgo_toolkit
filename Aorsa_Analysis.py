@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 import f90nml as f90
 import os
+from collections.abc import Iterable
 import meshio
 from plasma import equilibrium_process
 # import helpers for eqdsk processing
@@ -327,7 +328,11 @@ class Aorsa_Post_Process():
     Class to post-process the various output files from an Aorsa run 
     """
     def __init__(self, vtk_file, aorsa2d_input_file, eqdsk_file):
-        self.vtk_file = vtk_file # global path to the vtk file 
+
+    
+        self.vtk_file = vtk_file # global path to the vtk file, or a list of paths if there are multiple
+
+
         self.aorsa2d_input_file = aorsa2d_input_file
 
         self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(eqdsk_file, doplot=False)
@@ -341,6 +346,13 @@ class Aorsa_Post_Process():
 
         self.read_mesh()
 
+    def is_iterable(self, var):
+        if isinstance(var, Iterable) and not isinstance(var, (str, bytes)):
+            return True
+        else:
+            return False
+
+
     def plot_equilibrium(self, figsize, levels):
         psizr = self.eqdsk['psizr']
         plt.figure(figsize=figsize)
@@ -352,23 +364,44 @@ class Aorsa_Post_Process():
         plt.show()
 
     def read_mesh(self):
-        self.mesh = meshio.read(self.vtk_file)
-        self.R_array = self.mesh.points[:,0]
-        self.Z_array = self.mesh.points[:,1]
-        self.triangulation = tri.Triangulation(self.R_array, self.Z_array)
+        if self.is_iterable(self.vtk_file):
+            self.mesh = []
+            for path in self.vtk_file:
+                self.mesh.append(meshio.read(path))
+
+            # assumes the same RZ grid between aorsa files. T
+            self.R_array = self.mesh[0].points[:,0]
+            self.Z_array = self.mesh[0].points[:,1]
+        else:
+            self.mesh = meshio.read(self.vtk_file)
+            self.R_array = self.mesh.points[:,0]
+            self.Z_array = self.mesh.points[:,1]
+        self.triangulation = tri.Triangulation(self.Z_array, self.R_array)
 
     def print_mesh_info(self):
         print('Mesh:')
-        print(self.mesh)
-        print('\nmesh.points.shape: ', self.mesh.points.shape) # note mesh.points has numpoints rows and 3 collumns, where col 0 is R, and col2 is Z
+        if self.is_iterable(self.vtk_file):
+            for mesh in self.mesh:
+                print(mesh)
+                print('\nmesh.points.shape: ', mesh.points.shape)
+        else:
+            print(self.mesh)
+            print('\nmesh.points.shape: ', self.mesh.points.shape) # note mesh.points has numpoints rows and 3 collumns, where col 0 is R, and col2 is Z
 
-    def plot_result_2D(self, key, title, cbar_label, cmap='viridis', figsize=(3,6), logplot=False, return_plot=False):
+    def plot_result_2D(self, key, title, cbar_label, cmap='viridis', figsize=(3,6), logplot=False, return_plot=False, multifile_idx=None):
         fig, ax = plt.subplots(figsize=figsize)
 
         if logplot:
-            tcf=ax.tricontourf(self.R_array, self.Z_array, (np.abs(self.mesh.point_data[key][:,0])+1), 400, cmap=cmap)
+            if self.is_iterable(self.vtk_file):
+                tcf=ax.tricontourf(self.R_array, self.Z_array, (np.abs(self.mesh[multifile_idx].point_data[key][:,0])+1), 400, cmap=cmap)
+            else:
+                tcf=ax.tricontourf(self.R_array, self.Z_array, (np.abs(self.mesh.point_data[key][:,0])+1), 400, cmap=cmap)
         else:
-            tcf=ax.tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0], 400, cmap=cmap)
+            if self.is_iterable(self.vtk_file):
+                tcf=ax.tricontourf(self.R_array, self.Z_array, self.mesh[multifile_idx].point_data[key][:,0], 400, cmap=cmap)
+            else:
+                tcf=ax.tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0], 400, cmap=cmap)
+
         cb = fig.colorbar(tcf)
         cb.set_label(cbar_label)
         ax.axis('equal')
@@ -382,21 +415,50 @@ class Aorsa_Post_Process():
             return fig, ax
         
         plt.show()
+    
+    def get_multifile_sum(self, key):
+        if self.is_iterable(self.vtk_file):
+            sum_mat = self.mesh[0].point_data[key][:,0]
+
+            for i in range(1,len(self.mesh)):
+                sum_mat += self.mesh[i].point_data[key][:,0]
+            
+            return sum_mat
+        
+        else:
+            raise ValueError('This helper function only is valid when multifile mode is being used.')
 
     def plot_Eplus_Eminus(self, cmap='viridis', figsize=(6,6), logplot=False, return_plot=False):
         fig, axs = plt.subplots(1, 2, figsize=figsize)
 
         # plot total abosorption 
         if logplot:
-            toplot0 = np.log(np.abs(self.mesh.point_data['re_eminus'][:,0])+1)
+            if self.is_iterable(self.vtk_file):
+                eminus_sum = self.get_multifile_sum('re_eminus')
+                eplus_sum = self.get_multifile_sum('re_eplus')
+                toplot0 = np.log(np.abs(eminus_sum)+1)
+                toplot1 = np.log(np.abs(eplus_sum)+1)
+            else:
+                toplot0 = np.log(np.abs(self.mesh.point_data['re_eminus'][:,0])+1)
+                toplot1 = np.log(np.abs(self.mesh.point_data['re_eplus'][:,0])+1)
+
             tcf0=axs[0].tricontourf(self.R_array, self.Z_array, toplot0, 400, cmap=cmap)
             axs[0].set_title(r'ln(|Re(E$_{-}$)| + 1)')
-            toplot1 = np.log(np.abs(self.mesh.point_data['re_eplus'][:,0])+1)
+            
             tcf1=axs[1].tricontourf(self.R_array, self.Z_array, toplot1, 400, cmap=cmap)
             axs[1].set_title(r'ln(|Re(E$_{+}$)| + 1)')
+
         else:
-            tcf0=axs[0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['re_eminus'][:,0], 400, cmap=cmap)
-            tcf1=axs[1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['re_eplus'][:,0], 400, cmap=cmap)
+            if self.is_iterable(self.vtk_file):
+                eminus = self.get_multifile_sum('re_eminus')
+                eplus = self.get_multifile_sum('re_eplus')
+
+            else:
+                eminus = self.mesh.point_data['re_eminus'][:,0]
+                eplus = self.mesh.point_data['re_eplus'][:,0]
+
+            tcf0=axs[0].tricontourf(self.R_array, self.Z_array, eminus, 400, cmap=cmap)
+            tcf1=axs[1].tricontourf(self.R_array, self.Z_array, eplus, 400, cmap=cmap)
             axs[0].set_title(r'Re(E$_{-}$)')
             axs[1].set_title(r'Re(E$_{+}$)')
 
@@ -430,7 +492,11 @@ class Aorsa_Post_Process():
             fig, axs = plt.subplots(2, 2, figsize=figsize)
 
         # plot total abosorption 
-        tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0], 400, cmap='hot')
+        if self.is_iterable(self.vtk_file):
+            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdot_tot'), 400, cmap='hot')
+        else:
+            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0], 400, cmap='hot')
+
         cb0 = fig.colorbar(tcf0)
         cb0.set_label(r'W/$m^3$')
         axs[0,0].axis('equal')
@@ -441,7 +507,11 @@ class Aorsa_Post_Process():
         axs[0,0].plot(self.R_wall, self.Z_wall)
 
         # plot electron absorption 
-        tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0], 400, cmap='hot')
+        if self.is_iterable(self.vtk_file):
+            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdote'), 400, cmap='hot')
+        else:
+            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0], 400, cmap='hot')
+
         cb1 = fig.colorbar(tcf1)
         cb1.set_label(r'W/$m^3$')
         axs[0,1].axis('equal')
@@ -469,8 +539,10 @@ class Aorsa_Post_Process():
                 col = 1
             
             key = 'wdoti' + str(i+1)
-
-            tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0], 400, cmap='hot')
+            if self.is_iterable(self.vtk_file):
+                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array,  self.get_multifile_sum(key), 400, cmap='hot')
+            else:
+                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0], 400, cmap='hot')
             cb = fig.colorbar(tcf)
             cb.set_label(r'W/$m^3$')
             axs[row, col].axis('equal')
