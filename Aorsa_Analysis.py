@@ -495,12 +495,12 @@ class Aorsa_Post_Process():
 
         # plot total abosorption 
         if self.is_iterable(self.vtk_file):
-            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdot_tot'), 400, cmap='hot')
+            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdot_tot')/1e6, 400, cmap='hot')
         else:
-            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0], 400, cmap='hot')
+            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0]/1e6, 400, cmap='hot')
 
         cb0 = fig.colorbar(tcf0)
-        cb0.set_label(r'W/$m^3$')
+        cb0.set_label(r'MW/$m^3$')
         axs[0,0].axis('equal')
         axs[0,0].set_xlabel('R [m]')
         axs[0,0].set_ylabel('Z [m]')
@@ -510,12 +510,12 @@ class Aorsa_Post_Process():
 
         # plot electron absorption 
         if self.is_iterable(self.vtk_file):
-            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdote'), 400, cmap='hot')
+            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdote')/1e6, 400, cmap='hot')
         else:
-            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0], 400, cmap='hot')
+            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0]/1e6, 400, cmap='hot')
 
         cb1 = fig.colorbar(tcf1)
-        cb1.set_label(r'W/$m^3$')
+        cb1.set_label(r'MW/$m^3$')
         axs[0,1].axis('equal')
         axs[0,1].set_xlabel('R [m]')
         axs[0,1].set_ylabel('Z [m]')
@@ -542,9 +542,9 @@ class Aorsa_Post_Process():
             
             key = 'wdoti' + str(i+1)
             if self.is_iterable(self.vtk_file):
-                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array,  self.get_multifile_sum(key), 400, cmap='hot')
+                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array,  self.get_multifile_sum(key)/1e6, 400, cmap='hot')
             else:
-                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0], 400, cmap='hot')
+                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0]/1e6, 400, cmap='hot')
             cb = fig.colorbar(tcf)
             cb.set_label(r'W/$m^3$')
             axs[row, col].axis('equal')
