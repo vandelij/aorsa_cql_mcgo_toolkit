@@ -31,9 +31,10 @@ class MCGO_Post_Process:
     Class to post-process output from MCGO including the .nc file and eventually the particle list
     """
 
-    def __init__(self, mcgo_nc_file, eqdsk_file=None, species='d'):
+    def __init__(self, mcgo_nc_file, eqdsk_file=None, species='d', particle_lists_on=False):
         self.eqdsk_file = eqdsk_file
         self.species = species
+        self.particle_lists_on = particle_lists_on
         # load up eqdsk using john's methods
         if self.eqdsk_file is not None:
             self.process_eqdsk()     
@@ -129,6 +130,14 @@ class MCGO_Post_Process:
         xx =np.asmatrix(self.vbnd).T # make a matrix (1,ivbnd)   [m/s]
         self.X = np.dot(xx, cosy)   # (ivbnd, iptchbnd) matrix
         self.Y = np.dot(xx, siny)    # (ivbnd, iptchbnd) matrix
+
+        if self.particle_lists_on:
+            self.rend= self.mcgo_nc.variables['rend'][:] #[m] R-coord at t=tend
+            self.zend= self.mcgo_nc.variables['zend'][:] #[m] Z-coord at t=tend
+            self.vparend= self.mcgo_nc.variables['vparend'][:] #[m/s] Vpar at t=tend
+            self.vperend= self.mcgo_nc.variables['vperend'][:] #[m/s] Vper at t=tend
+            self.ivparini= self.mcgo_nc.variables['ivparini'][:] #sign of Vpar at t=0
+
 
     def get_rho_index(self, rho):
         """helper function to return the nearnest rho grid index for a particular rho
@@ -379,3 +388,20 @@ class MCGO_Post_Process:
         if return_plot == True:
             return fig, axs
         plt.show()   
+
+    def plot_particle_end_RZ(self, figsize=(10,10), levels=10, fontsize=14, dotsize=2, return_plot=False):
+
+        # plot the equilibrium
+        fig, ax = self.plot_equilibrium(
+            figsize=figsize, levels=levels, fontsize=fontsize, return_plot=True
+        )
+
+        kp=np.where(self.ivparini>0) # RED:  Vpar>0 at t=0
+        kn=np.where(self.ivparini<0) # BLUE: Vpar<0 at t=0
+        plt.plot(self.rend[kp],self.zend[kp],'r.',markersize=dotsize)  #Large arrays; consider stride
+        plt.plot(self.rend[kn],self.zend[kn],'b.',markersize=dotsize)  #Large arrays; consider stride 
+        ax.grid()
+        if return_plot:
+            return fig, ax
+
+        plt.show()
