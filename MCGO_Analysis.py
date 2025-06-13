@@ -18,7 +18,7 @@ import f90nml as f90
 from matplotlib.collections import LineCollection
 from matplotlib.font_manager import FontProperties
 from matplotlib.ticker import FormatStrFormatter, FuncFormatter
-
+import re
 # import John's toolkit area
 import plasma
 from plasma import equilibrium_process
@@ -405,3 +405,97 @@ class MCGO_Post_Process:
             return fig, ax
 
         plt.show()
+
+    def update_fortran_input_deck_full(self,
+        input_file,
+        updates,
+        out_file
+        ):
+        """Takes an mcgo input files and allows the user to update variables and profiles. 
+
+        Parameters
+        ----------
+        input_file : path str
+            path to mcgo input file, used as the template 
+        updates : dict 
+            a dictunary with string keys matching the mcgo input file variables, and values of what to replace them with.
+            examples of dict pairs: 
+           
+            updates = {'mf': [120],
+                    'rte': [1e5]*100,
+                    'rni(1,1)': [2e5]*100},
+                    "namei": ["a", "b", "z"],
+
+        out_file : path str
+            path to the output file where the new mcgo input file is written. 
+        """
+
+        # Load the deck from file
+        with open(input_file, "r") as f:
+            input_lines = f.readlines()
+
+        output_lines = []
+        i = 0
+
+        while i < len(input_lines):
+            line = input_lines[i].rstrip()
+            leading_spaces = re.match(r"^(\s*)", line).group(1)
+            indexed_match = re.match(r"^(\s*)(\w+\(\d+,\d+\))\s*=", line)
+            if indexed_match:
+                leading_ws, full_key = indexed_match.groups()
+                if full_key in updates:
+                    values = updates[full_key]
+                    chunk_size = 5
+                    chunks = [
+                        leading_ws + '   ' + '   '.join(f"{v:.6E}" for v in values[i:i+chunk_size]) + '\n'
+                        for i in range(0, len(values), chunk_size)
+                    ]
+                    # First line uses the assignment
+                    output_lines.append(f"{leading_ws}{full_key}= {chunks[0].lstrip()}")
+                    output_lines.extend(chunks[1:])
+                    i += 1
+                    assignment_start = re.compile(r"^\s*\w+(\([^\)]*\))?\s*=")
+                    while i < len(input_lines) and not assignment_start.match(input_lines[i]):
+                        i += 1
+                    continue
+                
+            # Match varname = value [! comment]
+            block_match = re.match(r"^(\w+)\s*=\s*([^!]*)(!?)(.*)", line.lstrip())
+            if block_match:
+                varname, existing_value, exclam, comment = block_match.groups()
+                if varname in updates:
+                    new_value = updates[varname]
+                    comment_part = f" {exclam}{comment}" if exclam else ""
+
+                    # Handle string or list-of-strings
+                    if isinstance(new_value, str):
+                        output_lines.append(leading_spaces + f"{varname}= '{new_value}'{comment_part}\n")
+                    elif isinstance(new_value, list) and all(isinstance(v, str) for v in new_value):
+                        joined = ','.join(f"'{v}'" for v in new_value)
+                        output_lines.append(leading_spaces + f"{varname}= {joined}{comment_part}\n")
+                    elif isinstance(new_value, list) and len(new_value) > 1:
+                        # Float block array (e.g., te)
+                        chunk_size = 5
+                        chunks = [
+                            '   ' + '   '.join(f"{v:.6E}" for v in new_value[i:i+chunk_size]) + '\n'
+                            for i in range(0, len(new_value), chunk_size)
+                        ]
+                        output_lines.append(leading_spaces + f"{varname}= {chunks[0].strip()}\n")
+                        output_lines.extend(chunks[1:])
+                    else:
+                        # Single float
+                        val = new_value[0] if isinstance(new_value, list) else new_value
+                        output_lines.append(leading_spaces + f"{varname}= {val}{comment_part}\n")
+
+                    i += 1
+                    while i < len(input_lines) and re.match(r"^\s*[\d.Ee\+\-\*]+", input_lines[i].strip()):
+                        i += 1
+                    continue
+
+            # Default: preserve original
+            output_lines.append(input_lines[i])
+            i += 1
+
+        # Save to a new file
+        with open(out_file, "w") as f:
+            f.writelines(output_lines)
