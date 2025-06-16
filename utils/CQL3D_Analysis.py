@@ -47,7 +47,7 @@ class CQL3D_Post_Process:
         self.gen_species_names = gen_species_names
 
         # load up eqdsk using john's methods
-        if eqdsk_file is not None:
+        if self.eqdsk_file is not None:
             self.process_eqdsk()
 
         # read .nc file and create usfull data
