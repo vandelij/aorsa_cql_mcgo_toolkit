@@ -82,6 +82,12 @@ class MCGO_Post_Process:
         self.psirzNorm = (psizr - psi_mag_axis) / (psi_boundary - psi_mag_axis)
         self.getpsirzNorm = RectBivariateSpline(rgrid, zgrid, self.psirzNorm.T)
 
+    def build_B_midplane_mag_interpolator(self):
+        print('yeah')
+        self.B_midplane_mag_interpolator = PchipInterpolator(
+            self.rho_grid, self.getBStrength(self.R_f_grid, self.eqdsk['zmaxis'], grid=False)
+        )
+
     def plot_equilibrium(self, figsize, levels=10, fontsize=20, return_plot=False):
         fig, ax = plt.subplots(figsize=figsize)
         # psizr = self.eqdsk["psizr"]
@@ -121,6 +127,7 @@ class MCGO_Post_Process:
     
     def parse_mcgo_nc(self):
         self.rho_grid = self.mcgo_nc.variables['rho_sqpolflx'][:] #Norm-ed rho~sqrt(pol.flux) at radbnd
+        self.R_f_grid = self.mcgo_nc.variables['radbnd'][:] # R bins corrisponding to self.rho_grid. 
         self.vdstb = self.mcgo_nc.variables['vdstb'][:] #Midplane distr.func aver over [tim_fdist_1;tim_fdist_2]
         self.vbnd = self.mcgo_nc.variables['vbnd'][:]   #Vel. grid [m/s] for distr. func.
         self.vmax = np.max(self.vbnd)
@@ -175,6 +182,8 @@ class MCGO_Post_Process:
         return (f_s_rho, np.asarray(self.X), np.asarray(self.Y))
     
     def cal_max_B_on_flux_surface(self, rho, tol=1e-3):
+        self.build_B_midplane_mag_interpolator() # TODO self.rho_grid here is not strictly increasing like in cql, but 
+        # is actually from 0.99 -> 0 -> 0.99 across all midplane R values. Need to fix this logic to handle this. 
         rho_target = rho
         Rmax = self.eqdsk['rmaxis']
         Rmin = min(self.eqdsk['rlim'])
@@ -293,7 +302,7 @@ class MCGO_Post_Process:
             axs[0].set_title(
                 f"Distribution function"
                 + r" at $\rho$"
-                + f" = {self.rho_grid[rho_index]:.4f} for Species {self.species}"
+                + f" = {self.rho_grid[rho_index]:.4f}\nR = {self.R_f_grid[rho_index]:.3f} m\nfor Species {self.species}"
             )
         else:
             axs[0].set_title(
@@ -303,19 +312,19 @@ class MCGO_Post_Process:
             )
 
         axs[0].set_aspect("equal")
-        axs[0].set_xlabel("$v_\parallel / v_{norm}$")
-        axs[0].set_ylabel("$v_\perp / v_{norm}$")
-        axs[0].set_xlim([-v_norm_over_v_max*self.vmax, v_norm_over_v_max*self.vmax])
-        axs[0].set_ylim([0, v_norm_over_v_max*self.vmax])
-        c1 = axs[0].contourf(VPAR, VPERP, f_s_rho, levels=400, cmap=cmap)
-        axs[0].contour(VPAR, VPERP, f_s_rho, levels=20, colors='black', linewidths=0.5)
+        axs[0].set_xlabel("$v_\parallel / v_{max}$")
+        axs[0].set_ylabel("$v_\perp / v_{max}$")
+        axs[0].set_xlim([-v_norm_over_v_max, v_norm_over_v_max])
+        axs[0].set_ylim([0, v_norm_over_v_max])
+        c1 = axs[0].contourf(VPAR/self.vmax, VPERP/self.vmax, f_s_rho, levels=400, cmap=cmap)
+        axs[0].contour(VPAR/self.vmax, VPERP/self.vmax, f_s_rho, levels=20, colors='black', linewidths=0.5)
         if energy_levels_linear == None:
             contour_lines1 = axs[0].contour(
-                VPAR, VPERP, E_ion, levels=levels_linear_E, colors=energy_color
+                VPAR/self.vmax, VPERP/self.vmax, E_ion, levels=levels_linear_E, colors=energy_color
             )
         else:
             contour_lines1 = axs[0].contour(
-                VPAR, VPERP, E_ion, levels=energy_levels_linear, colors=energy_color
+                VPAR/self.vmax, VPERP/self.vmax, E_ion, levels=energy_levels_linear, colors=energy_color
             )
 
         axs[0].clabel(
@@ -330,7 +339,7 @@ class MCGO_Post_Process:
             axs[1].set_title(
                 f"LOG10 Distribution function"
                 + r" at $\rho$"
-                + f" = {self.rho_grid[rho_index]:.4f} for Species {self.species}"
+                + f" = {self.rho_grid[rho_index]:.4f}\nR = {self.R_f_grid[rho_index]:.3f} m\nfor Species {self.species}"
             )
         else:
             axs[1].set_title(
@@ -344,30 +353,30 @@ class MCGO_Post_Process:
         axs[1].set_ylabel("$v_\perp / v_{norm}$")
         axs[1].set_xlim(
             [
-                -v_norm_over_v_max*self.vmax * log_scale_axis_multiple,
-                v_norm_over_v_max*self.vmax * log_scale_axis_multiple,
+                -v_norm_over_v_max * log_scale_axis_multiple,
+                v_norm_over_v_max * log_scale_axis_multiple,
             ]
         )
-        axs[1].set_ylim([0, v_norm_over_v_max*self.vmax * log_scale_axis_multiple])
+        axs[1].set_ylim([0, v_norm_over_v_max * log_scale_axis_multiple])
         if energy_levels_log == None:
             contour_lines2 = axs[1].contour(
-                VPAR, VPERP, E_ion, levels=levels_log_E, colors=energy_color
+                VPAR/self.vmax, VPERP/self.vmax, E_ion, levels=levels_log_E, colors=energy_color
             )
         else:
             contour_lines2 = axs[1].contour(
-                VPAR, VPERP, E_ion, levels=energy_levels_log, colors=energy_color
+                VPAR/self.vmax, VPERP/self.vmax, E_ion, levels=energy_levels_log, colors=energy_color
             )
 
         axs[1].clabel(
             contour_lines2, inline=True, fontsize=8, fmt=lambda x: f"{x:.1f} [keV]"
         )
-        c2 = axs[1].contourf(VPAR, VPERP, np.log10(np.clip(f_s_rho, log_clip_level, None)), levels=400, cmap=cmap)
+        c2 = axs[1].contourf(VPAR/self.vmax, VPERP/self.vmax, np.log10(np.clip(f_s_rho, log_clip_level, None)), levels=400, cmap=cmap)
         fig.colorbar(
             c2,
             ax=axs[1],
             label=r"LOG10($f_s$) [$\frac{v_{norm}^3}{(cm^3*(cm/sec)^3)}$]",
         )
-        axs[1].contour(VPAR, VPERP, np.log10(np.clip(f_s_rho, log_clip_level, None)), levels=20, colors='black', linewidths=0.5)
+        axs[1].contour(VPAR/self.vmax, VPERP/self.vmax, np.log10(np.clip(f_s_rho, log_clip_level, None)), levels=20, colors='black', linewidths=0.5)
         if use_interpolated_rho == False:
             rho = self.rho_grid[rho_index]
         else:
