@@ -415,7 +415,7 @@ class MCGO_Post_Process:
 
         plt.show()
 
-    def update_fortran_input_deck_full(self,
+    def update_fortran_input_deck(self,
         input_file,
         updates,
         out_file
@@ -771,6 +771,6 @@ class MCGO_Post_Process:
             nc.description = "Generated from MCGO output."
             nc.nP = nP         
         
-        print(f'File saved to {p2f_particle_list_filename}')
+        print(f'File saved to {p2f_particle_list_filename}\n num particles: {nP}')
 
 
