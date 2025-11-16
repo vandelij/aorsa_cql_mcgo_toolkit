@@ -546,7 +546,7 @@ class Aorsa_Post_Process():
             else:
                 tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0]/1e6, 400, cmap='hot')
             cb = fig.colorbar(tcf)
-            cb.set_label(r'W/$m^3$')
+            cb.set_label(r'MW/$m^3$')
             axs[row, col].axis('equal')
             axs[row, col].set_xlabel('R [m]')
             axs[row, col].set_ylabel('Z [m]')

@@ -10,7 +10,7 @@ import matplotlib.colors as colors
 import matplotlib.cbook as cbook
 from matplotlib import cm
 from matplotlib import ticker, cm
-from scipy.interpolate import interp1d, RectBivariateSpline, PchipInterpolator
+from scipy.interpolate import interp1d, RectBivariateSpline, PchipInterpolator, RegularGridInterpolator
 from scipy.optimize import curve_fit
 import os, sys
 import netCDF4
@@ -31,7 +31,7 @@ class MCGO_Post_Process:
     Class to post-process output from MCGO including the .nc file and eventually the particle list
     """
 
-    def __init__(self, mcgo_nc_file, eqdsk_file=None, species='d', particle_lists_on=False):
+    def __init__(self, mcgo_nc_file=None, eqdsk_file=None, species='d', particle_lists_on=False):
         self.eqdsk_file = eqdsk_file
         self.species = species
         self.particle_lists_on = particle_lists_on
@@ -40,14 +40,21 @@ class MCGO_Post_Process:
             self.process_eqdsk()     
 
         # read .nc file
-        self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
+        if mcgo_nc_file is not None:
+            self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
 
-        # parse the file 
-        self.parse_mcgo_nc()
+            # parse the file 
+            self.parse_mcgo_nc()
 
         # assign mass from supported mcgo species
         self.species_dict = {}
         self.species_dict['d'] = {'mass':3.343583e-27, 'charge':1.6022e-19}
+
+    def read_mcgo_nc(self, mcgo_nc_file):
+        self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
+
+        # parse the file
+        self.parse_mcgo_nc()
 
     def process_eqdsk(self):
         # unpack the equilibrium magnetics
@@ -83,7 +90,6 @@ class MCGO_Post_Process:
         self.getpsirzNorm = RectBivariateSpline(rgrid, zgrid, self.psirzNorm.T)
 
     def build_B_midplane_mag_interpolator(self):
-        print('yeah')
         self.B_midplane_mag_interpolator = PchipInterpolator(
             self.rho_grid, self.getBStrength(self.R_f_grid, self.eqdsk['zmaxis'], grid=False)
         )
@@ -728,7 +734,7 @@ class MCGO_Post_Process:
             return fig, axs
         plt.show()  
 
-    def p2f_convert_mcgo_particle_list_to_p2f_particle_list(self, p2f_particle_list_filename):
+    def p2f_convert_mcgo_particle_list_to_p2f_particle_list(self, p2f_particle_list_filename, weight):
         """
         Save 1D arrays of particle data to a NetCDF file for use with p2f.
 
@@ -737,40 +743,315 @@ class MCGO_Post_Process:
         p2f_particle_list_filename : str
             Output path to NetCDF file (e.g., "particles.nc").
         """
-        # read in mcgo end particle lists
-        r = self.mcgo_nc.variables['rend'][:] #[m] R-coord at t=tend
-        z = self.mcgo_nc.variables['zend'][:] #[m] Z-coord at t=tend
-        vpar= self.mcgo_nc.variables['vparend'][:] #[m/s] Vpar at t=tend
-        vperp= self.mcgo_nc.variables['vperend'][:] #[m/s] Vper at t=tend
-        weight = np.ones_like(r) # TODO for now, just assume the weights are one. Not sure how they should be set 
 
-        
-        assert all(len(arr) == len(r) for arr in [z, vperp, vpar, weight]), "All input arrays must be the same length"
+        # Read in MCGO end particle lists
+        r = self.mcgo_nc.variables['rend'][:]     # [m] R-coord at t=tend
+        z = self.mcgo_nc.variables['zend'][:]     # [m] Z-coord at t=tend
+        vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
+        vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        weight = np.ones_like(r)*weight  # TODO: adjust weights appropriately
+
+        assert all(len(arr) == len(r) for arr in [z, vperp, vpar, weight]), \
+            "All input arrays must be the same length"
+
         nP = len(r)
 
         with netCDF4.Dataset(p2f_particle_list_filename, "w", format="NETCDF4") as nc:
-            # Define the dimension
+            # Define dimension
             nc.createDimension("nP", nP)
 
-            # Create variables that p2f expects for reading 
-            r_var      = nc.createVariable("R", "f4", ("nP",))
-            z_var      = nc.createVariable("z", "f4", ("nP",))
-            vperp_var  = nc.createVariable("vPer", "f4", ("nP",))
-            vpar_var   = nc.createVariable("vPar", "f4", ("nP",))
+            # Create variables expected by p2f
+            r_var = nc.createVariable("R", "f4", ("nP",))
+            z_var = nc.createVariable("z", "f4", ("nP",))
+            vperp_var = nc.createVariable("vPer", "f4", ("nP",))
+            vpar_var = nc.createVariable("vPar", "f4", ("nP",))
             weight_var = nc.createVariable("weight", "f4", ("nP",))
 
-            # Write data
-            r_var[:]      = r
-            z_var[:]      = z
-            vperp_var[:]  = vperp
-            vpar_var[:]   = vpar
+            # Assign data
+            r_var[:] = r
+            z_var[:] = z
+            vperp_var[:] = vperp
+            vpar_var[:] = vpar
             weight_var[:] = weight
 
-            # Optional: add metadata
+            # Optional metadata
             nc.title = "Particle list for p2f"
             nc.description = "Generated from MCGO output."
-            nc.nP = nP         
-        
-        print(f'File saved to {p2f_particle_list_filename}\n num particles: {nP}')
+            nc.num_particles = nP
 
+        print(f"File saved to {p2f_particle_list_filename}\nNumber of particles: {nP}")
+
+
+    def bin_particles_RZ(self, NR, NZ):
+        # Read in MCGO end particle lists
+        r = self.mcgo_nc.variables['rend'][:]     # [m] R-coord at t=tend
+        z = self.mcgo_nc.variables['zend'][:]     # [m] Z-coord at t=tend
+        vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
+        vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        Rmin = np.min(r)
+        Rmax = np.max(r)
+        Zmin = np.min(z)
+        Zmax = np.max(z)
+        R_edges = np.linspace(Rmin, Rmax, NR+1)
+        Z_edges = np.linspace(Zmin, Zmax, NZ+1)
+        self.R_bin = np.digitize(r, R_edges) - 1
+        self.Z_bin = np.digitize(z, Z_edges) - 1
+
+    def plot_bin_particles_RZ(self, NR, NZ, i, j, figsize=(5,5), fontsize=12):
+        vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
+        vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        self.bin_particles_RZ(NR, NZ)
+        mask = (self.R_bin == i) & (self.Z_bin == j)
+        vperp_local = vperp[mask]
+        vpar_local = vpar[mask]
+
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.scatter(vpar_local, vperp_local, marker='.', color='black')
+        ax.set_aspect('equal')
+
+        font = FontProperties(size=fontsize)
+
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(fontsize)
+
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(fontsize)
+        ax.set_xlabel('vpar [m/s]', font=font)
+        ax.set_ylabel('vperp [m/s]', font=font)
+
+class Orbit_Plotter:
+    """
+    Class to run single particle orbits and plot them for visualization 
+    """
+
+    def __init__(self, eqdsk_file=None, species='d'):
+        self.eqdsk_file = eqdsk_file
+        self.species = species
+        # load up eqdsk using john's methods
+        if self.eqdsk_file is not None:
+            self.process_eqdsk()     
+
+        # assign mass from supported mcgo species
+        self.species_dict = {}
+        self.species_dict['d'] = {'mass':3.343583e-27, 'charge':1.6022e-19}
+
+    def process_eqdsk(self):
+        # unpack the equilibrium magnetics
+        self.eqdsk, fig = plasma.equilibrium_process.readGEQDSK(
+            self.eqdsk_file, doplot=False
+        )
+        self.eqdsk_with_B_info = getGfileDict(self.eqdsk_file)
+
+        rgrid = self.eqdsk_with_B_info["rgrid"]
+        zgrid = self.eqdsk_with_B_info["zgrid"]
+        self.R_wall = self.eqdsk["rlim"]
+        self.Z_wall = self.eqdsk["zlim"]
+
+        self.R_lcfs = self.eqdsk["rbbbs"]
+        self.Z_lcfs = self.eqdsk["zbbbs"]
+        B_zGrid = self.eqdsk_with_B_info["bzrz"]
+        B_TGrid = self.eqdsk_with_B_info["btrz"]
+        B_rGrid = self.eqdsk_with_B_info["brrz"]
+
+        # get the total feild strength
+        Bstrength = np.sqrt(
+            np.square(B_zGrid) + np.square(B_TGrid) + np.square(B_rGrid)
+        )
+
+        # create a function that can grab the B-feild magnitude at any r, z coordiante pair.
+        self.getBStrength = RectBivariateSpline(rgrid, zgrid, Bstrength.T)
+
+        # create the normalized flux function #TODO confirm that the user is using this flux coord for mapping
+        psizr = self.eqdsk_with_B_info["psirz"]
+        psi_mag_axis = self.eqdsk_with_B_info["ssimag"]
+        psi_boundary = self.eqdsk_with_B_info["ssibry"]
+        self.psirzNorm = (psizr - psi_mag_axis) / (psi_boundary - psi_mag_axis)
+        self.getpsirzNorm = RectBivariateSpline(rgrid, zgrid, self.psirzNorm.T)
+
+        # build vector B interpolators 
+        self.bz_interp = RegularGridInterpolator(
+                    (rgrid, zgrid),    # axis order must match bz array shape
+                    B_zGrid.T,
+                    bounds_error=True,
+                    )
+        self.br_interp = RegularGridInterpolator(
+                    (rgrid, zgrid),    # axis order must match bz array shape
+                    B_rGrid.T,
+                    bounds_error=True,
+                    )
+        self.bt_interp = RegularGridInterpolator(
+                    (rgrid, zgrid),    # axis order must match bz array shape
+                    B_TGrid.T,
+                    bounds_error=True,
+                    )
+
+    def plot_equilibrium(self, figsize, levels=10, fontsize=20, return_plot=False):
+        fig, ax = plt.subplots(figsize=figsize)
+        # psizr = self.eqdsk["psizr"]
+        # psi_mag_axis = self.eqdsk["simag"]
+        # psi_boundary = self.eqdsk["sibry"]
+
+        # ## THIS NEEDS TO BE TOROIDAL RHO
+        # # normalize the psirz so that the norm is 1 on boundary and zero on axis
+        # psirzNorm = (psizr - psi_mag_axis)/(psi_boundary-psi_mag_axis)
+        # ax.axis("equal")
+        # # img = ax.contour(self.eqdsk["r"], self.eqdsk["z"], psirzNorm.T, levels=levels, colors='black')
+        ax.axis("equal")
+        img = ax.contour(
+            self.eqdsk_with_B_info["rgrid"],
+            self.eqdsk_with_B_info["zgrid"],
+            self.psirzNorm,
+            levels=levels,
+            colors="black",
+        )
+        ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="red", linewidth=3)
+        ax.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
+        font = FontProperties(size=fontsize)
+        formatter = FuncFormatter(lambda x, _: f'{x:.1f}')
+        ax.xaxis.set_major_formatter(formatter)
+        ax.yaxis.set_major_formatter(formatter)  # If you want y-axis too
+        for tick in ax.xaxis.get_major_ticks():
+            tick.label.set_fontsize(fontsize)
+
+        for tick in ax.yaxis.get_major_ticks():
+            tick.label.set_fontsize(fontsize)
+        ax.set_xlabel('R [m]', font=font)
+        ax.set_ylabel('Z [m]', font=font)
+        if return_plot:
+            return fig, ax
+
+        plt.show()
+
+    def plot_cyclotron_harmonics(
+            self,
+            frequency,
+            harmonics,
+            species_mass,
+            species_charge,
+            r_resolution,
+            z_resolution,
+            levels,
+            fontsize=14,
+            figsize=(10, 10),
+            harmonic_color="blue",
+            return_plot=False,
+            xticks=[1.0, 1.4, 1.8, 2.2],
+        ):
+            """frequency: launched wave fequency [Hz]
+            harmonics: list of harmonics to plot (example: [1, 2, 3] will plot the 1st, second, and third cyclotron harmonics for species)
+            r_resolution: number of radial points to search over per z coord to plot the harmonic
+            z_resolution: number of z coords.
+
+            """
+
+            # plot the equilibrium
+            fig, ax = self.plot_equilibrium(
+                figsize=figsize, levels=levels, fontsize=fontsize, return_plot=True
+            )
+            ax.set_xticks(xticks)
+            # set up harmonics
+            w_wave = frequency * 2 * np.pi
+            r_points = np.linspace(
+                self.eqdsk_with_B_info["rgrid"][0],
+                self.eqdsk_with_B_info["rgrid"][-1],
+                r_resolution,
+            )
+            z_points = np.linspace(
+                self.eqdsk_with_B_info["zgrid"][0],
+                self.eqdsk_with_B_info["zgrid"][-1],
+                z_resolution,
+            )
+            Bfield = self.getBStrength(r_points, z_points)
+
+            omega_j = species_charge * Bfield / species_mass
+            #print(np.max(omega_j))
+            normalized_w_wave = w_wave / omega_j
+            R, Z = np.meshgrid(r_points, z_points)
+            #print(np.max(normalized_w_wave))
+            CS = ax.contour(
+                R,
+                Z,
+                normalized_w_wave.T,
+                levels=harmonics,
+                colors=(harmonic_color,),
+                linestyles=("--",),
+            )
+            labels = ax.clabel(CS, fmt="%2.1d", colors=harmonic_color, fontsize=20)
+
+            for label in labels:
+                label.set_rotation(0)
+
+            if return_plot:
+                return fig, ax
+            plt.show()
+
+    # define particle modeling. One could in theory add other fields here.
+
+
+    def B_field(self, r_v):
+
+        r = (r_v[0] ** 2 + r_v[1] ** 2) ** 0.5
+        z = r_v[2]
+
+        Br = self.br_interp((r,z))
+        Bz = self.bz_interp((r,z))
+        Bt = self.bt_interp((r,z))
+
+        # convert to cartesian 
+        theta = np.arctan2(r_v[1], r_v[0])
+
+        Bx = Br*np.cos(theta) - Bt*np.sin(theta)
+        By = Br*np.sin(theta) + Bt*np.cos(theta)
+
+        return np.array([Bx, By, Bz])
+
+    def E_field(self, r_v):
+        return np.array([0, 0, 0])
+
+    def lorenz_force(self, r, v):
+        return self.q * (self.E_field(r) + np.cross(v, self.B_field(r))) / self.m
+
+    def boris_step(self, rn, vn, dt, interp=False):
+        # works for magetic field
+        v_minus = vn + (self.q * self.E_field(rn) / self.m) * (dt / 2)
+
+        t = (self.q * self.B_field(rn) / self.m) * dt / 2
+
+        s = 2 * t / (1 + np.linalg.norm(t) ** 2)
+        v_prime = v_minus + np.cross(v_minus, t)
+        v_plus = v_minus + np.cross(v_prime, s)
+
+        vn_plus_one = v_plus + (self.q * self.E_field(rn) / self.m) * (
+            dt / 2
+        )
+
+        rn_plus_one = rn + dt * vn_plus_one
+
+        return rn_plus_one, vn_plus_one
+
+
+    def run_boris(self, r0, v0, nt, dt, species='d', interp=False):
+        r = r0
+        v = v0
+        x = np.zeros((nt, 1))
+        y = np.zeros((nt, 1))
+        z = np.zeros((nt, 1))
+        v_squared = np.zeros((nt, 1))
+
+        # set species info 
+        self.q = self.species_dict[species]['charge']
+        self.m = self.species_dict[species]['mass']
+
+        for i in range(nt):
+            x[i] = r[0]
+            y[i] = r[1]
+            z[i] = r[2]
+            v_squared[i] = v[0] ** 2 + v[1] ** 2 + v[2] ** 2
+            r, v = self.boris_step(r, v, dt)
+        self.x_boris = x
+        self.y_boris = y
+        self.z_boris = z
+        self.v_squared_boris = v_squared
+
+        return x, y, z   
 

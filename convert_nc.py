@@ -1,10 +1,10 @@
 import numpy as np
 import netCDF4
 
-cql3d_nc_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/iterations_scripts/cql3d_manual_pre.nc"
+cql3d_nc_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/iterations_scripts/cql3d_bb.nc"
 
 
-output_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/iterations_scripts/cql3d_manual_post.nc"
+output_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/iterations_scripts/cql3d_bbp.nc"
 
 
 
