@@ -150,7 +150,15 @@ class MCGO_Post_Process:
             self.vparend= self.mcgo_nc.variables['vparend'][:] #[m/s] Vpar at t=tend
             self.vperend= self.mcgo_nc.variables['vperend'][:] #[m/s] Vper at t=tend
             self.ivparini= self.mcgo_nc.variables['ivparini'][:] #sign of Vpar at t=0
-
+            try:
+                self.weight_factors = self.mcgo_nc.variables['anormal']
+            except:
+                print("nc file missing field 'anormal'")
+            try:
+                self.ipcount = self.mcgo_nc.variables['ipcount']
+                self.kep1 = self.mcgo_nc.variables['kep1']
+            except:
+                print("nc file missing field 'anormal'")
 
     def get_rho_index(self, rho):
         """helper function to return the nearnest rho grid index for a particular rho
@@ -537,9 +545,10 @@ class MCGO_Post_Process:
         ax.set_title('P2F Density')
 
         # convert from 1/cm^3 to 1/m^3
-        contour = ax.contourf(self.p2f_rbin_centers, self.p2f_zbin_centers, density*1e6, levels=100, cmap=cmap)
+        contour = ax.contourf(self.p2f_rbin_centers, self.p2f_zbin_centers, density, levels=100, cmap=cmap)
         fig.colorbar(contour, ax=ax, label=r'Density [m$^{-3}$]')
-
+        ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="red", linewidth=1)
+        ax.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=1, linestyle='--')
         if return_plot:
             return fig, ax
 
@@ -749,7 +758,7 @@ class MCGO_Post_Process:
         z = self.mcgo_nc.variables['zend'][:]     # [m] Z-coord at t=tend
         vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
         vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
-        weight = np.ones_like(r)*weight  # TODO: adjust weights appropriately
+        #weight = np.ones_like(r)*weight  # TODO: adjust weights appropriately
 
         assert all(len(arr) == len(r) for arr in [z, vperp, vpar, weight]), \
             "All input arrays must be the same length"
