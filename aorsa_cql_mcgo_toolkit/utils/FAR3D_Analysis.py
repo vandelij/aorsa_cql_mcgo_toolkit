@@ -22,6 +22,7 @@ import re
 # import John's toolkit area
 import plasma
 from plasma import equilibrium_process
+import textwrap
 
 # import Grant's eqdsk processor for getting B info
 from process_eqdsk2 import getGfileDict
@@ -44,6 +45,28 @@ class Far3D_Analysis:
         self.species_dict['d'] = {'mass':3.343583e-27, 'charge':1.6022e-19}
 
         self.data_dict = {} # will hold all of the far3d output data
+        self.case_txt_dict = {} # will hold the profiles for the case to aid in setup 
+
+        self.headers = flux_file_columns = [
+                        "Rho(norml. sqrt. toroid. flux)",
+                        "q",
+                        "Beam Ion Density(10^13 cm^-3)",
+                        "Ion Density(10^13 cm^-3)",
+                        "Elec Density(10^13 cm^-3)",
+                        "Impurity Density(10^13 cm^-3)",
+                        "Beam Ion Effective Temp(keV)",
+                        "Ion Temp(keV)",
+                        "Electron Temp(keV)",
+                        "Beam Pressure(kPa)",
+                        "Thermal Pressure(kPa)",
+                        "Equil.Pressure(kPa)",
+                        "Zeff",
+                        "Tor Rot(kHz)",
+                        "Tor Rot(10^5 m/s)",
+                        "RF Ion Density(10^13 cm^-3)",
+                        "RF Ion Effective Temp(keV)",
+                        "RF Pressure(kPa)"
+                    ]
 
     def process_eqdsk(self):
         # unpack the equilibrium magnetics
@@ -195,8 +218,10 @@ class Far3D_Analysis:
             for im in range(num_pos_ms):
                 m = ms[im]
                 print(f'm: {m}')
-                fr_cos_term = file_dict['interpolators'][im](rho)
-                fr_sin_term = file_dict['interpolators'][im + num_pos_ms](rho)
+                # fr_cos_term = file_dict['interpolators'][im](rho)
+                # fr_sin_term = file_dict['interpolators'][im + num_pos_ms](rho)
+                fr_sin_term = file_dict['interpolators'][im](rho)
+                fr_cos_term = file_dict['interpolators'][im + num_pos_ms](rho)
                 mode_sum += fr_cos_term * np.cos(m*(theta + phase)) \
                 + fr_sin_term * np.sin(m*(theta + phase))
             return mode_sum
@@ -246,4 +271,61 @@ class Far3D_Analysis:
         fig.colorbar(
             c1, ax=ax, label=f"{far3d_output_name} magnitude"
         )
+
+
+    def load_profile(self, profile_name, profile_array):
+        if profile_name not in self.headers:
+            raise ValueError(f'Name {profile_name} not recognized.')
+        
+        self.case_txt_dict[profile_name] = profile_array
+        
+    def setup_far3d_run_txt_file(self, out_txt_file_path):
+        data = np.zeros((len(self.case_txt_dict['Rho(norml. sqrt. toroid. flux)']), len(self.headers)))
+
+        i = 0
+        for name in self.headers:
+            if name not in self.case_txt_dict.keys():
+                print(f'Warning. name {name} profile not found. Filling with zeros...')
+                data[:,i] = 0
+            else:
+                data[:, i] = self.case_txt_dict[name]
+            i += 1
+
+        # now, save the txt file 
+
+
+        # 1. Prepare your descriptive header block
+        # Using a f-string makes it easy to inject variables if these change
+        header_text = textwrap.dedent(f"""\
+        PLASMA GEOMETRY 
+        Vacuum Toroidal magnetic field at R=1.69550002m [Tesla]
+            1.6621
+        Geometric Center Major radius [m]
+            1.69
+        Minor radius [m]
+            0.7936
+        Avg. Elongation
+            1.59
+        Avg. Top/Bottom Triangularity
+            0.36
+        Main Contaminant Species
+            12C
+        Main Ion Species mass/proton mass
+            2.0
+        TRYING TO GET TO BETA(0)=0.011, Rmax=1.71
+
+        {", ".join(self.headers)}""")
+
+        # 2. Save using np.savetxt
+        # 'data' is your 2D numpy array
+        np.savetxt(
+            out_txt_file_path, 
+            data, 
+            fmt="%.5f",           # Formats numbers to 5 decimal places to match your example
+            header=header_text, 
+            comments="",          # This prevents the default '#' from being added
+            delimiter=" "         # Space delimited
+        )
+        
+        
 
