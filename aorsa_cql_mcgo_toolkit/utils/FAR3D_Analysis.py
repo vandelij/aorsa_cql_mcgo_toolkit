@@ -206,7 +206,7 @@ class Far3D_Analysis:
         psi_norm = self.getpsirzNorm(R,Z).item()
         if psi_norm < psi_norm_max:
             theta = np.mod(np.arctan2(Z - self.Zcenter, R - self.Rcenter), 2*np.pi)
-            rho = psi_norm # TODO confirm its not np.sqrt(psi_norm)
+            rho = np.sqrt(psi_norm) # TODO confirm its not np.sqrt(psi_norm)
 
             # load up the file dict to assess 
             file_dict = self.data_dict[far3d_output_name]
@@ -326,6 +326,27 @@ class Far3D_Analysis:
             comments="",          # This prevents the default '#' from being added
             delimiter=" "         # Space delimited
         )
+
+    def calculate_effective_temperature(self, varray, farray, species):
+        """Calculates the effective temperature of a speed distribution.
+
+        Parameters
+        ----------
+        varray : float array
+            velocity array [m/s]. Must extend far into tail of distribution 
+        farray : float array
+            distrubtuion vlaue. leading coefficients cancel out
+        species : string
+            species name for mass retreival 
+
+        Returns
+        -------
+        float
+            effective temperature [keV]
+        """
+        jouls_to_kev = 1/(1000 * 1.6022e-19)
+        mass = self.species_dict[species]
+        return jouls_to_kev*mass*np.trapz(farray*varray**2, varray) / np.trapz(farray, varray)
         
         
 
