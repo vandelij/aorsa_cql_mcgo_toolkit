@@ -11,6 +11,7 @@ import matplotlib.cbook as cbook
 from matplotlib import cm
 from matplotlib import ticker, cm
 from scipy.interpolate import interp1d, RectBivariateSpline, PchipInterpolator, RegularGridInterpolator
+from scipy.integrate import cumulative_trapezoid
 from scipy.optimize import curve_fit
 import os, sys
 import netCDF4
@@ -47,26 +48,32 @@ class Far3D_Analysis:
         self.data_dict = {} # will hold all of the far3d output data
         self.case_txt_dict = {} # will hold the profiles for the case to aid in setup 
 
+        # initialize lists to later hold fitted maxwellians for far3d. 
+        self.nbulk = []
+        self.Tbulk = []
+        self.nNBI = []
+        self.TNBI = []
+        self.nRF = []
+        self.TRF = []
+
         self.headers = flux_file_columns = [
-                        "Rho(norml. sqrt. toroid. flux)",
-                        "q",
-                        "Beam Ion Density(10^13 cm^-3)",
-                        "Ion Density(10^13 cm^-3)",
-                        "Elec Density(10^13 cm^-3)",
-                        "Impurity Density(10^13 cm^-3)",
-                        "Beam Ion Effective Temp(keV)",
-                        "Ion Temp(keV)",
-                        "Electron Temp(keV)",
-                        "Beam Pressure(kPa)",
-                        "Thermal Pressure(kPa)",
-                        "Equil.Pressure(kPa)",
-                        "Zeff",
-                        "Tor Rot(kHz)",
-                        "Tor Rot(10^5 m/s)",
-                        "RF Ion Density(10^13 cm^-3)",
-                        "RF Ion Effective Temp(keV)",
-                        "RF Pressure(kPa)"
-                    ]
+                    "rho_e",           # 1. Normalized Rho
+                    "qprof",           # 2. Safety factor q
+                    "den_beam_e",      # 3. Beam Ion Density (10^20 m^-3)
+                    "den_ion_e",       # 4. Bulk Ion Density (10^20 m^-3)
+                    "den_elec_e",      # 5. Electron Density (10^20 m^-3)
+                    "den_alpha_e",     # 6. RF Ion Density (10^20 m^-3) -> Using Alpha slot
+                    "den_imp_e",       # 7. Impurity Density (10^20 m^-3)
+                    "temp_beam_e",     # 8. Beam Ion Effective Temp (keV)
+                    "temp_ion_e",      # 9. Bulk Ion Temp (keV)
+                    "temp_elec_e",     # 10. Electron Temp (keV)
+                    "temp_alpha_e",    # 11. RF Ion Effective Temp (keV) -> Using Alpha slot
+                    "pres_beam_e",     # 12. Beam Pressure (kPa)
+                    "pres_thermal_e",  # 13. Thermal Pressure (kPa)
+                    "pres_equil_e",    # 14. Equilibrium Pressure (kPa)
+                    "tor_rot_vel_e",   # 15. Toroidal Rotation (km/s)
+                    "pol_rot_vel_e"    # 16. Poloidal Rotation (km/s)
+                ]
 
     def process_eqdsk(self):
         # unpack the equilibrium magnetics
@@ -141,6 +148,8 @@ class Far3D_Analysis:
         ax.set_xlabel('R [m]', font=font)
         ax.set_ylabel('Z [m]', font=font)
         ax.grid()
+
+        ax.scatter(self.Rcenter, self.Zcenter, marker='x', color='black')
         if return_plot:
             return fig, ax
 
@@ -280,7 +289,7 @@ class Far3D_Analysis:
         self.case_txt_dict[profile_name] = profile_array
         
     def setup_far3d_run_txt_file(self, out_txt_file_path):
-        data = np.zeros((len(self.case_txt_dict['Rho(norml. sqrt. toroid. flux)']), len(self.headers)))
+        data = np.zeros((len(self.case_txt_dict['rho_e']), len(self.headers)))
 
         i = 0
         for name in self.headers:
@@ -291,6 +300,8 @@ class Far3D_Analysis:
                 data[:, i] = self.case_txt_dict[name]
             i += 1
 
+        # calculate the minor radius 
+        minor_radius = (max(self.eqdsk['rbbbs']) - min(self.eqdsk['rbbbs'])) / 2
         # now, save the txt file 
 
 
@@ -298,12 +309,12 @@ class Far3D_Analysis:
         # Using a f-string makes it easy to inject variables if these change
         header_text = textwrap.dedent(f"""\
         PLASMA GEOMETRY 
-        Vacuum Toroidal magnetic field at R=1.69550002m [Tesla]
-            1.6621
+        Vacuum Toroidal magnetic field at R={self.eqdsk['rcentr']:.3f}m [Tesla]
+            {self.eqdsk['bcentr']:.3f}
         Geometric Center Major radius [m]
-            1.69
+            {self.eqdsk['rcentr']:.3f}
         Minor radius [m]
-            0.7936
+            {minor_radius:.3f}
         Avg. Elongation
             1.59
         Avg. Top/Bottom Triangularity
@@ -327,13 +338,13 @@ class Far3D_Analysis:
             delimiter=" "         # Space delimited
         )
 
-    def calculate_effective_temperature(self, varray, farray, species):
+    def calculate_effective_temperature(self, varray, farray, species, F_type='full'):
         """Calculates the effective temperature of a speed distribution.
 
         Parameters
         ----------
         varray : float array
-            velocity array [m/s]. Must extend far into tail of distribution 
+            velocity array [m/s]. Must extend over desired part of distribution.  
         farray : float array
             distrubtuion vlaue. leading coefficients cancel out
         species : string
@@ -345,8 +356,1154 @@ class Far3D_Analysis:
             effective temperature [keV]
         """
         jouls_to_kev = 1/(1000 * 1.6022e-19)
-        mass = self.species_dict[species]
-        return jouls_to_kev*mass*np.trapz(farray*varray**2, varray) / np.trapz(farray, varray)
+        mass = self.species_dict[species]['mass']
+        if F_type == 'full':
+            return jouls_to_kev*mass*np.trapz(farray*varray**2, varray) / np.trapz(farray, varray)
+        elif F_type == 'speed':
+            return  jouls_to_kev*mass*np.trapz(farray, varray) / np.trapz(farray/varray**2, varray)
+    
+    def maxwell(self, v, n, T, species):
+        """maxwellian distribution given v
+
+        Parameters
+        ----------
+        v : float
+            particle speed [m/s]
+        n : float
+            density [1/m^3]
+        T : float
+            temperature [keV]
+        """
+        T = T * 1000 * 1.6022e-19 # convert to J
+        mass = self.species_dict[species]['mass']
+        return n*(mass / (2*np.pi*T))**(3/2) * np.exp(-mass*v**2/(2*T))
+    
+    def maxwell_speed_distribution(self, s, n, T, species):
+        return self.maxwell(v=s,n=n,T=T, species=species) * 4 * np.pi * s**2
+    
+    def slowing_down_far3d(self, v, n, Te, species):
+        me = 9.109e-31
+        ve = np.sqrt(Te*1000*1.6022e-19*2/me)
+        mass = self.species_dict[species]['mass']
+        vc = (3 * np.sqrt(np.pi) * me/(4*mass))**(1/3) * ve
+        return (n/(4*np.pi)) / (v**3 + vc**3)
+    
+    def slowing_down_speed_far3d(self, s, n, Te, species):
+        return 4*np.pi*s**2 * self.slowing_down_far3d(v=s, n=n, Te=Te, species=species)
+    
+    def integrate_speed_distribution(self, v, F):
+        return np.trapz(F, v) # density in m^-3
+    
+    def load_electron_temperature_profile(self, rho, Te):
+        self.Te_interpolator_kev  = interp1d(rho, Te, kind='linear')
+
+    def load_electron_density_profile(self, rho, ne):
+        self.ne_interpolator_m3  = interp1d(rho, ne, kind='linear')
+
+    def load_ion_temperature_profile(self, rho, Ti):
+        self.Ti_interpolator_kev  = interp1d(rho, Ti, kind='linear')
+
+    def sum_of_maxwellians(self, v, *params):
+        """Computes the sum of N maxwellians over the speed grid v
+
+        Parameters
+        ----------
+        v : iterable of floats
+            speed array
+            *params expects densities. Additionally, self.maxwell_fit_temps needs to be set. 
+        """
+        y = np.zeros_like(v)
+        for i in range(0, len(params)):
+            n = params[i]
+            T = self.maxwell_fit_temps[i]
+            y += self.maxwell_speed_distribution(s=v, n=n, T=T, species=self.species)
+        return y
+    
+    def single_maxwellain_to_fit(self, v, *params):
+        n = params[0]
+        T = params[1]
+        return self.maxwell_speed_distribution(s=v, n=n, T=T, species=self.species)
+    
+    def log10_wrapper_single_maxwellain_to_fit(self, v, *params):
+        n = params[0]
+        T = params[1]
+        return np.log10(self.maxwell_speed_distribution(s=v, n=n, T=T, species=self.species)+1e-50)
+    
+    def log10_wrapper_sum_maxwellians(self, v, *params):
+        return np.log10(self.sum_of_maxwellians(v, *params) + 1e-50)
+    
+    def sum_of_maxwellians_bulk_nbi(self, v, *params):
+        """Computes the sum of 2 maxwellians over the speed grid v
+
+        Parameters
+        ----------
+        v : iterable of floats
+            speed array
+            *params expects densities. Additionally, self.maxwell_fit_temps needs to be set. 
+        """
+        Tbulk = self.T_bulk_opt
+        nbulk = params[0]
+        n_nbi = params[1]
+        T_nbi = params[2]
+        bulk = self.maxwell_speed_distribution(s=v, n=nbulk, T=Tbulk, species=self.species)
+        nbi = self.maxwell_speed_distribution(s=v, n=n_nbi, T=T_nbi, species=self.species)
+        return bulk + nbi
+    
+    def log10_wrapper_sum_maxwellians_bulk_nbi(self, v, *params):
+        return np.log10(self.sum_of_maxwellians_bulk_nbi(v, *params) + 1e-50)
+
+    def sum_of_maxwellians_rf(self, v, *params):
+        """Computes the sum of 3 maxwellians over the speed grid v
+
+        Parameters
+        ----------
+        v : iterable of floats
+            speed array
+            *params expects densities. Additionally, self.maxwell_fit_temps needs to be set. 
+        """
+        nbulk = self.opt1_results[0]
+        Tbulk = self.opt1_results[1]
+        n_nbi = self.opt1_results[2]
+        T_nbi = self.opt1_results[3]
+        nRF = params[0]
+        TRF = params[1]
+
+        bulk = self.maxwell_speed_distribution(s=v, n=nbulk, T=Tbulk, species=self.species)
+        nbi = self.maxwell_speed_distribution(s=v, n=n_nbi, T=T_nbi, species=self.species)
+        rf = self.maxwell_speed_distribution(s=v, n=nRF, T=TRF, species=self.species)
+        return bulk + nbi + rf
+    
+    def log10_wrapper_sum_maxwellians_rf(self, v, *params):
+        return np.log10(self.sum_of_maxwellians_rf(v, *params) + 1e-50)
+
+    def fit_3_maxwellians_to_speed_distribution(self, v, F, E_NBI_kev, rho):
+        E_NBI = E_NBI_kev * 1000 * 1.6022e-19
+        v_NBI = np.sqrt(2*E_NBI / self.species_dict[self.species]['mass'])
+        if v[-1] < v_NBI:
+            raise ValueError(f'The velocity grid supplied does not extend to beam input energy {E_NBI_kev} keV')
+        
+        n_tot = self.integrate_speed_distribution(v=v, F=F)
+        n_bulk_guess = n_tot
+
+        Tbulk_kev = self.Ti_interpolator_kev(rho)
+        Te_bulk_kev = self.Te_interpolator_kev(rho) 
+
+        slowing_down_v = np.linspace(v[0], v_NBI, len(v))
+        slowing_down_shape = self.slowing_down_far3d(v=slowing_down_v, n=1, Te=Te_bulk_kev, species=self.species)
+        T_NBI = self.calculate_effective_temperature(varray=slowing_down_v, farray=slowing_down_shape, species=self.species)
+
+        F_interp = interp1d(v, F, kind='linear')
+        me = 9.109e-31
+        ve = np.sqrt(Te_bulk_kev*1000*1.6022e-19*2/me)
+        mass = self.species_dict[self.species]['mass']
+        vc = (3 * np.sqrt(np.pi) * me/(4*mass))**(1/3) * ve
+        F_at_v_NBI = F_interp(v_NBI)
+        n_NBI_guess = F_at_v_NBI * (v_NBI**3 + vc**3) / v_NBI**2
+
+        RF_v = np.linspace(v_NBI, v[-1], len(v))
+        F_RF = F_interp(RF_v)
+        T_RF = self.calculate_effective_temperature(varray=RF_v, farray=F_RF, species=self.species) #TODO this is not correct, F(s) vs f(v)
+        n_RF_guess = self.integrate_speed_distribution(v=RF_v, F=F_RF)
+
+        # set up optimization initial conditions
+        print(f'temps found: {[float(Tbulk_kev), T_NBI, T_RF]}')
+        self.maxwell_fit_temps = [float(Tbulk_kev), T_NBI, T_RF]
+
+        initial_guess = [n_bulk_guess, n_NBI_guess, n_RF_guess]
+        lower_bounds = [n_bulk_guess/2, 0.0, 0.0]
+        upper_bounds = [n_bulk_guess*1.001, n_tot, n_tot] # certainly, the maximums will not be higher than the totol!
+        print(initial_guess)
+        # now, actually perform the optimization 
+        popt, pcov = curve_fit(
+            self.log10_wrapper_sum_maxwellians, 
+            v, 
+            np.log10(F+1e-50), 
+            p0=initial_guess, 
+            bounds=(lower_bounds, upper_bounds)
+        )     
+
+        return popt, self.maxwell_fit_temps
+    
+    def fit_3_maxwellians_to_speed_distribution_sequential(self, v, F, E_NBI_kev, rho):
+        E_NBI = E_NBI_kev * 1000 * 1.6022e-19
+        v_NBI = np.sqrt(2*E_NBI / self.species_dict[self.species]['mass'])
+
+        if v[-1] < v_NBI:
+            raise ValueError(f'The velocity grid supplied does not extend to beam input energy {E_NBI_kev} keV')
+        
+        n_tot = self.integrate_speed_distribution(v=v, F=F)
+        n_bulk_guess = n_tot*0.99 # small factor to make sure the optimization is happy
+
+        Tbulk_kev = self.Ti_interpolator_kev(rho)
+        Te_bulk_kev = self.Te_interpolator_kev(rho) 
+
+        slowing_down_v = np.linspace(v[0], v_NBI, len(v))
+        slowing_down_shape = self.slowing_down_far3d(v=slowing_down_v, n=1, Te=Te_bulk_kev, species=self.species)
+        T_NBI_guess = self.calculate_effective_temperature(varray=slowing_down_v, farray=slowing_down_shape, species=self.species)
+
+        F_interp = interp1d(v, F, kind='linear')
+        me = 9.109e-31
+        ve = np.sqrt(Te_bulk_kev*1000*1.6022e-19*2/me)
+        mass = self.species_dict[self.species]['mass']
+        vc = (3 * np.sqrt(np.pi) * me/(4*mass))**(1/3) * ve
+        F_at_v_NBI = F_interp(v_NBI)
+        n_NBI_guess = F_at_v_NBI * (v_NBI**3 + vc**3) / v_NBI**2
+
+        RF_v = np.linspace(v_NBI, v[-1], len(v))
+        F_RF = F_interp(RF_v)
+        T_RF_guess = T_NBI_guess #self.calculate_effective_temperature(varray=RF_v, farray=F_RF, species=self.species)
+        n_RF_guess = self.integrate_speed_distribution(v=RF_v, F=F_RF)
+
+        # set up optimization initial conditions for optimization 1:
+        v_opt1 = np.linspace(v[0], v_NBI, len(v))
+        F_opt_1 = F_interp(v_opt1)
+        initial_guess = [n_bulk_guess, n_NBI_guess, T_NBI_guess]
+        lower_bounds = [n_bulk_guess/2, 0.0, Te_bulk_kev]
+        upper_bounds = [n_tot, n_tot, T_NBI_guess] # certainly, the maximums will not be higher than the totol for the density!
+        self.T_bulk_opt = Tbulk_kev # set the tbulk for the optimizer to use
+        print(f'initial guess for optimization 1 [n_bulk_guess, n_NBI_guess, T_NBI_guess]: {initial_guess}')
+
+        # now, actually perform the optimization 1
+        popt, pcov = curve_fit(
+            self.log10_wrapper_sum_maxwellians_bulk_nbi, 
+            v_opt1, 
+            np.log10(F_opt_1+1e-50), 
+            p0=initial_guess, 
+            bounds=(lower_bounds, upper_bounds)
+        )   
+
+        # unwrap found answers and store for the next optimization 
+        n_bulk = popt[0]
+        n_NBI = popt[1]
+        T_NBI = popt[2]
+        print(f'Found: nbulk: {n_bulk}, nNBI: {n_NBI}, T_NBI: {T_NBI} kev')
+        self.opt1_results = [n_bulk, Tbulk_kev, n_NBI, T_NBI]  
+
+        # start second fit 
+        initial_guess = [n_RF_guess, T_RF_guess]
+        lower_bounds = [0, T_NBI]
+        upper_bounds = [n_NBI, T_RF_guess*100] 
+        print(f'initial guess for optimization 2: [n_RF_guess, T_RF_guess]: {initial_guess}')
+
+        # now, actually perform the optimization 2
+        popt2, pcov2 = curve_fit(
+            self.log10_wrapper_sum_maxwellians_rf, 
+            v, 
+            np.log10(F+1e-50), 
+            p0=initial_guess, 
+            bounds=(lower_bounds, upper_bounds)
+        )   
+
+        # unpack the results 
+        n_RF = popt2[0]
+        T_RF = popt2[1]
+        print(f'Results: n_bulk {n_bulk}, Tbulk_kev {Tbulk_kev}, n_NBI {n_NBI}, T_NBI {T_NBI}, n_RF {n_RF}, T_RF {T_RF}')
+        return [n_bulk, Tbulk_kev, n_NBI, T_NBI, n_RF, T_RF]
+
+    
+    def fit_3_maxwellians_to_speed_distribution_NBI_moment(self, v, F, E_NBI_kev, rho):
+        E_NBI = E_NBI_kev * 1000 * 1.6022e-19
+        v_NBI = np.sqrt(2*E_NBI / self.species_dict[self.species]['mass'])
+
+        if v[-1] < v_NBI:
+            raise ValueError(f'The velocity grid supplied does not extend to beam input energy {E_NBI_kev} keV')
+        
+        n_tot = self.integrate_speed_distribution(v=v, F=F)
+        n_bulk_guess = n_tot*0.99 # small factor to make sure the optimization is happy
+
+        Tbulk_kev = self.Ti_interpolator_kev(rho)
+        Te_bulk_kev = self.Te_interpolator_kev(rho) 
+
+        v_thermal = np.sqrt(Tbulk_kev*1000*1.6022e-19*2/self.species_dict[self.species]['mass'])
+
+        thermal_speeds = np.linspace(v[0], v_thermal*3, len(v)) # TODO assumes thermal distribution contribution is only 3x bulk 
+
+        # slowing_down_v = np.linspace(v[0], v_NBI, len(v))
+        # slowing_down_shape = self.slowing_down_far3d(v=slowing_down_v, n=1, Te=Te_bulk_kev, species=self.species)
+        # T_NBI_guess = self.calculate_effective_temperature(varray=slowing_down_v, farray=slowing_down_shape, species=self.species)
+
+        F_interp = interp1d(v, F, kind='linear')
+
+        F_thermal_range = F_interp(thermal_speeds)
+
+        # fit just the maxwellian
+        initial_guess = [n_bulk_guess, Tbulk_kev]
+        lower_bounds = [n_bulk_guess/2, Tbulk_kev/2]
+        upper_bounds = [n_tot, Tbulk_kev*2]        
+
+        # now, actually perform the optimization 1: fitting the thermal bulk 
+        popt, pcov = curve_fit(
+            self.single_maxwellain_to_fit, 
+            thermal_speeds, 
+            F_thermal_range, 
+            p0=initial_guess, 
+            bounds=(lower_bounds, upper_bounds)
+        )   
+        # unpack result 
+        nbulk = popt[0]
+        Tbulk = popt[1]
+
+        # grab the thermal part, and subtract it from the F over the full range. 
+        thermal_bulk_f_full = self.maxwell_speed_distribution(s=v, n=nbulk, T=Tbulk, species=self.species)
+        F_minus_bulk = F - thermal_bulk_f_full
+        F_minus_bulk_interp = interp1d(v, F_minus_bulk, kind='linear')
+
+        # now, fit the RF tail on a log10 scale way out past vNBI: 1.2 times it 
+        # rf_speeds = np.linspace(v_NBI*1.2, v[-1], len(v))
+        rf_speeds = np.linspace(v_NBI*1.4, v[-1], len(v))
+        rf_function_to_fit = F_minus_bulk_interp(rf_speeds)
+        rf_function_to_fit[rf_function_to_fit < 0] = 0 # enforve non-negative 
+        initial_guess = [nbulk/10, Tbulk]
+        lower_bounds = [0.0, Tbulk]
+        upper_bounds = [nbulk/2, Tbulk*200]
+
+        #return rf_speeds, rf_function_to_fit
+
+        popt, pcov = curve_fit(
+            self.log10_wrapper_single_maxwellain_to_fit, 
+            rf_speeds, 
+            np.log10(rf_function_to_fit+1e-50), 
+            p0=initial_guess, 
+            bounds=(lower_bounds, upper_bounds)
+        )  
+
+        # unpack results 
+        nRF = popt[0]
+        TRF = popt[1]
+
+        # finally, find the remainder and take moments of it to get the NBI contribution 
+        v_slowing_down = np.linspace(0.01, v_NBI, len(v))
+        F_remainder = F_minus_bulk_interp(v_slowing_down) - self.maxwell_speed_distribution(s=v_slowing_down, n=nRF, T=TRF, species=self.species)
+        F_remainder[F_remainder < 0] = 0.0
+        print(min(F_remainder))
+        nNBI = self.integrate_speed_distribution(v=v_slowing_down, F=F_remainder)
+
+        F_slowing = self.slowing_down_speed_far3d(s=v_slowing_down, n=nNBI, Te=Te_bulk_kev, species=self.species)
+        TNBI =   self.calculate_effective_temperature(v_slowing_down, F_slowing, species=self.species, F_type='speed')
+
+        return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+
+
+    def fit_3_maxwellians_to_speed_distribution_only_moments(self, v, F, E_NBI_kev, rho):
+        E_NBI = E_NBI_kev * 1000 * 1.6022e-19
+        v_NBI = np.sqrt(2*E_NBI / self.species_dict[self.species]['mass'])
+
+        if v[-1] < v_NBI:
+            raise ValueError(f'The velocity grid supplied does not extend to beam input energy {E_NBI_kev} keV')
+        
+        n_tot = self.integrate_speed_distribution(v=v, F=F)
+        n_bulk_guess = n_tot*0.99 # small factor to make sure the optimization is happy
+
+        Tbulk_kev = self.Ti_interpolator_kev(rho)
+        Te_bulk_kev = self.Te_interpolator_kev(rho) 
+
+        v_thermal = np.sqrt(Tbulk_kev*1000*1.6022e-19*2/self.species_dict[self.species]['mass'])
+
+        thermal_speeds = np.linspace(20000, v_NBI/np.sqrt(3), len(v))
+
+        F_interp = interp1d(v, F, kind='linear')
+
+        F_thermal_range = F_interp(thermal_speeds)
+
+        nbulk = self.integrate_speed_distribution(v=thermal_speeds, F=F_thermal_range)
+        Tbulk = self.calculate_effective_temperature(varray=thermal_speeds, farray=F_thermal_range, species=self.species, F_type='speed')
+
+        # subtract of the bulk 
+        F_rf_nbi = F - self.maxwell_speed_distribution(s=v, n=nbulk, T=Tbulk, species=self.species)
+        F_rf_nbi_interp = interp1d(v, F_rf_nbi, kind='linear')
+
+        NBI_speeds = np.linspace(20000, v_NBI*1.2, len(v))
+        RF_speeds = np.linspace(v_NBI*1.2, v[-1], len(v))
+
+        F_rf_nbi_nbi_speeds = F_rf_nbi_interp(NBI_speeds)
+        F_rf_nbi_rf_speeds = F_rf_nbi_interp(RF_speeds)
+
+        # nbi 
+        nNBI = self.integrate_speed_distribution(v=NBI_speeds, F=F_rf_nbi_nbi_speeds)
+        TNBI = self.calculate_effective_temperature(varray=NBI_speeds, farray=F_rf_nbi_nbi_speeds, species=self.species, F_type='speed')
+
+        # RF 
+        nRF = self.integrate_speed_distribution(v=RF_speeds, F=F_rf_nbi_rf_speeds)
+        TRF = self.calculate_effective_temperature(varray=RF_speeds, farray=F_rf_nbi_rf_speeds, species=self.species, F_type='speed')
+        return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+        #return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF], thermal_speeds, F_thermal_range
+
+    def fit_3_maxwellians_to_speed_distribution_critical_speeds(self, v, F, E_NBI_kev, rho, num_iter_max=1000):
+        E_NBI = E_NBI_kev * 1000 * 1.6022e-19
+        v_NBI = np.sqrt(2*E_NBI / self.species_dict[self.species]['mass'])
+
+        if v[-1] < v_NBI:
+            raise ValueError(f'The velocity grid supplied does not extend to beam input energy {E_NBI_kev} keV')
+        
+        n_tot = self.integrate_speed_distribution(v=v, F=F)
+        n_bulk_guess = n_tot*0.99 # small factor to make sure the optimization is happy
+
+        Tbulk_kev = self.Ti_interpolator_kev(rho)
+        Te_bulk_kev = self.Te_interpolator_kev(rho) 
+
+        v_thermal = np.sqrt(Tbulk_kev*1000*1.6022e-19*2/self.species_dict[self.species]['mass'])
+
+        # thermal_speeds = np.linspace(20000, v_NBI/np.sqrt(3), len(v))
+
+        # F_interp = interp1d(v, F, kind='linear')
+
+        # F_thermal_range = F_interp(thermal_speeds)
+
+        # nbulk = self.integrate_speed_distribution(v=thermal_speeds, F=F_thermal_range)
+        # Tbulk = self.calculate_effective_temperature(varray=thermal_speeds, farray=F_thermal_range, species=self.species, F_type='speed')
+        thermal_speeds = np.linspace(v[0], v_thermal*3, len(v))
+        F_interp = interp1d(v, F, kind='linear')
+
+        F_thermal_range = F_interp(thermal_speeds)
+
+        # fit just the maxwellian
+        initial_guess = [n_bulk_guess, Tbulk_kev]
+        lower_bounds = [n_bulk_guess/2, Tbulk_kev/2]
+        upper_bounds = [n_tot, Tbulk_kev*2]        
+
+        # now, actually perform the optimization 1: fitting the thermal bulk 
+        popt, pcov = curve_fit(
+            self.single_maxwellain_to_fit, 
+            thermal_speeds, 
+            F_thermal_range, 
+            p0=initial_guess, 
+            bounds=(lower_bounds, upper_bounds)
+        )   
+        # unpack result 
+        nbulk = popt[0]
+        Tbulk = popt[1]
+
+
+        print(f'Ti at rho: {Tbulk_kev} keV')
+        # subtract of the bulk 
+        F_rf_nbi = F - self.maxwell_speed_distribution(s=v, n=nbulk, T=Tbulk, species=self.species)
+        F_rf_nbi[F_rf_nbi < 0] = 0.0
+        F_rf_nbi_interp = interp1d(v, F_rf_nbi, kind='linear')
+        self.F_rf_nbi_interp = F_rf_nbi_interp # TODO for debug
+
+        mu0 = 4*np.pi * 1e-7
+        rho_m = nbulk * self.species_dict[self.species]['mass'] 
+        vA = self.eqdsk['bcentr'] / np.sqrt(mu0*rho_m)
+
+        RF_speeds = np.linspace(v_NBI*1.2, v[-1], len(v))
+        F_rf_nbi_rf_speeds = F_rf_nbi_interp(RF_speeds)
+        TRF = self.calculate_effective_temperature(varray=RF_speeds, farray=F_rf_nbi_rf_speeds, species=self.species, F_type='speed')
+
+        nRF_guess = nbulk/10
+        nRF_lower_bound = 0
+        nRF_upper_bound = nbulk
+        tol=1e-6
+        error=1
+        #num_iter_max = 1000
+        i = 0
+        while error > tol:
+            Fguess = self.maxwell_speed_distribution(s=vA, n=nRF_guess, T=TRF, species=self.species)
+
+            if Fguess > F_rf_nbi_interp(vA):
+                nRF_upper_bound = nRF_guess
+                nRF_guess = (nRF_lower_bound + nRF_guess)/2
+            elif Fguess <=  F_rf_nbi_interp(vA):
+                nRF_lower_bound = nRF_guess
+                nRF_guess = (nRF_upper_bound + nRF_guess)/2       
+            error = np.abs((Fguess - F_rf_nbi_interp(vA))/F_rf_nbi_interp(vA)) 
+            i += 1
+            if i > num_iter_max:
+                raise ValueError(f'Maximum number of iterations reached for calculating nRF. error final: {error}')  
+
+        nRF = nRF_guess 
+
+        NBI_speeds = np.linspace(20000, v_NBI*1.2, len(v))
+        # RF_speeds = np.linspace(v_NBI*1.2, v[-1], len(v))
+
+        F_rf_nbi_nbi_speeds = F_rf_nbi_interp(NBI_speeds)
+        
+        # F_rf_nbi_rf_speeds = F_rf_nbi_interp(RF_speeds)
+
+        # # nbi 
+        # nNBI = self.integrate_speed_distribution(v=NBI_speeds, F=F_rf_nbi_nbi_speeds)
+        TNBI = self.calculate_effective_temperature(varray=NBI_speeds, farray=F_rf_nbi_nbi_speeds, species=self.species, F_type='speed')
+
+        nNBI_guess = nbulk/10
+        nNBI_lower_bound = 0
+        nNBI_upper_bound = nbulk
+        tol=1e-6
+        error=1
+        #num_iter_max = 1000
+        i = 0
+        #print(f'F at vA/2: {F_rf_nbi_interp(vA/2):.4e}')
+        #print(f'TNBI: {TNBI} kev')
+        while error > tol:
+            #print(nNBI_guess)
+            Fguess = self.maxwell_speed_distribution(s=vA/2, n=nNBI_guess, T=TNBI, species=self.species)
+            #print(f'{Fguess:.4e}')
+            if Fguess > F_rf_nbi_interp(vA/2):
+                nNBI_upper_bound = nNBI_guess
+                nNBI_guess = (nNBI_lower_bound + nNBI_guess)/2
+            elif Fguess <=  F_rf_nbi_interp(vA/2):
+                nNBI_lower_bound = nNBI_guess
+                nNBI_guess = (nNBI_upper_bound + nNBI_guess)/2       
+            error = np.abs((Fguess - F_rf_nbi_interp(vA/2))/F_rf_nbi_interp(vA/2)) 
+            i += 1
+            if i > num_iter_max:
+                raise ValueError(f'Maximum number of iterations, {num_iter_max}, reached for calculating NBI. error final: {error}. nNBI_guess: {nNBI_guess:.4e}')  
+
+        nNBI = nNBI_guess 
+
+        return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+
+
+
+
+    def plot_maxwellian_fit(self, v, F, dens, temps_kev, xlim, ylim, nm, Tm, figsize=(24,10)):
+
+        # calculate the center alfven velocity energy
+        mu0 = 4*np.pi * 1e-7
+        rho_m = dens[0] * self.species_dict[self.species]['mass'] 
+        vA = self.eqdsk['bcentr'] / np.sqrt(mu0*rho_m)
+        print(f'Alfven velocity: {vA/1000:.2f} km/s')
+        E_A = 0.5 * self.species_dict[self.species]['mass'] * vA**2
+        E_A_over_two = 0.5 * self.species_dict[self.species]['mass'] * (vA/2)**2
+        print(f'E_A: {E_A/1000 / 1.6022e-19} keV') 
+        bulk_maxwellian = self.maxwell_speed_distribution(s=v, n=dens[0], T=temps_kev[0], species=self.species)
+        nbi_maxwellian = self.maxwell_speed_distribution(s=v, n=dens[1], T=temps_kev[1], species=self.species)
+        RF_maxwellian = self.maxwell_speed_distribution(s=v, n=dens[2], T=temps_kev[2], species=self.species)
+
+        self.maxwell_fit_temps = temps_kev
+        sum_maxwellians = self.sum_of_maxwellians(v, dens[0], dens[1], dens[2])
+
+        fig, axs = plt.subplots(3, 1, figsize=figsize)
+        egrid_kev = 0.5*self.species_dict[self.species]['mass']*v**2 / (1000 * 1.6022e-19)
+        axs[0].plot(egrid_kev, bulk_maxwellian, color='red', label='Bulk')
+        axs[0].plot(egrid_kev, nbi_maxwellian, color='purple', label='NBI')
+        axs[0].plot(egrid_kev, RF_maxwellian, color='darkred', label='RF tail')
+        axs[0].plot(egrid_kev, F, label='True F(v)', color='blue')
+        axs[0].plot(egrid_kev, sum_maxwellians, color='black', linestyle='-.', label='sum')
+        axs[0].grid()
+        axs[0].set_ylim(ylim[0], ylim[1])
+        axs[0].set_xlim(xlim[0], xlim[1])
+        axs[0].axvline(x=(E_A/1000 / 1.6022e-19), color='darkgreen', linestyle='--', label=r'$v_{A}$')
+        axs[0].axvline(x=(E_A_over_two/1000 / 1.6022e-19), color='green', linestyle='--', label=r'$v_{A}/2$')
+        axs[0].legend()
+        axs[0].set_xlabel('E [keV]')
+        axs[0].set_ylabel(r'F(v) [m$^{-3}$/(m/s)]')
+
+        axs[1].plot(egrid_kev, np.log10(bulk_maxwellian+1e-50), color='red', label='Bulk')
+        axs[1].plot(egrid_kev, np.log10(nbi_maxwellian+1e-50), color='purple', label='NBI')
+        axs[1].plot(egrid_kev, np.log10(RF_maxwellian+1e-50), color='darkred', label='RF tail')
+        axs[1].plot(egrid_kev, np.log10(F+1e-50), label='True F(v)', color='blue')
+        axs[1].plot(egrid_kev, np.log10(sum_maxwellians+1e-50), color='black', linestyle='-.', label='sum')
+        axs[1].axvline(x=(E_A/1000 / 1.6022e-19), color='darkgreen', linestyle='--', label=r'$v_{A}$')
+        axs[1].axvline(x=(E_A_over_two/1000 / 1.6022e-19), color='green', linestyle='--', label=r'$v_{A}/2$')
+        axs[1].set_xlabel('E [keV]')
+        axs[1].set_ylabel(r'log10 F(v) [m$^{-3}$/(m/s)]')
+        
+        axs[1].grid()
+        axs[1].legend()
+        #axs[1].set_xlim(xlim[0], xlim[1])
+        axs[1].set_ylim(-20, None)
+        axs[2].plot(egrid_kev, F - bulk_maxwellian, color='red', label='F - Thermal Bulk')
+        axs[2].axvline(x=(E_A/1000 / 1.6022e-19), color='darkgreen', linestyle='--', label=r'$v_{A}$')
+        axs[2].axvline(x=(E_A_over_two/1000 / 1.6022e-19), color='green', linestyle='--', label=r'$v_{A}/2$')
+        axs[2].plot(egrid_kev, self.maxwell_speed_distribution(s=v, n=nm, T=Tm, species=self.species), label='manual maxwell')
+        axs[2].grid()
+        axs[2].legend()
+        axs[2].set_ylim(ylim[0], ylim[1])
+        axs[2].set_xlim(xlim[0], xlim[1])
+        axs[2].set_xlabel('E [keV]')
+        axs[2].set_ylabel(r'F(v) [m$^{-3}$/(m/s)]')
+        #axs[1].set_xlim(xlim[0], xlim[1])
+
+
+    def get_energetic_profiles(self, rho_array, v_array, F_of_v_indexable_by_rho, E_NBI_kev, num_iter_max=10000, return_arrays=False):
+        num_rhos = len(rho_array)
+
+        # initialize the profiles arrays 
+        Tbulks = np.zeros((num_rhos))
+        nbulks = np.zeros((num_rhos))
+        TNBIs = np.zeros((num_rhos))
+        nNBIs = np.zeros((num_rhos))
+        TRFs = np.zeros((num_rhos))
+        nRFs = np.zeros((num_rhos))
+
+        # loop over rho. fit the profiles. 
+        print('Starting profile fitting routine.')
+        for ir in range(num_rhos):
+            rhoi = rho_array[ir]
+            fit = self.fit_3_maxwellians_to_speed_distribution_critical_speeds(v=v_array, F=F_of_v_indexable_by_rho[ir, :], E_NBI_kev=E_NBI_kev, rho=rhoi, num_iter_max=num_iter_max)
+            # unpack 
+            nbulks[ir] = fit[0]
+            Tbulks[ir] = fit[1]
+
+            nNBIs[ir] = fit[2]
+            TNBIs[ir] = fit[3]
+
+            nRFs[ir] = fit[4]
+            TRFs[ir] = fit[5]
+
+        # build interpolators for use later when loading up the profiles 
+        self.nbulks_interp = interp1d(rho_array, nbulks, kind='linear')
+        self.Tbulks_interp = interp1d(rho_array, Tbulks, kind='linear')
+
+        self.nNBIs_interp = interp1d(rho_array, nNBIs, kind='linear')
+        self.TNBIs_interp = interp1d(rho_array, TNBIs, kind='linear')
+
+        self.nRFs_interp = interp1d(rho_array, nRFs, kind='linear')
+        self.TRFs_interp = interp1d(rho_array, TRFs, kind='linear')
+
+        if return_arrays:
+            return nbulks, Tbulks, nNBIs, TNBIs, nRFs, TRFs
+        
+    # def load_F_of_v_indexable_by_rho(self, rho_array, v_array, F_of_v_indexable_by_rho):
+    #     self.velocity_array_for_F = v_array
+    #     self.rho_for_F_array = rho_array
+    #     self.F_of_v_indexable_by_rho = F_of_v_indexable_by_rho
+
+    def convert_cql3d_distribution_into_F_of_v_indexable_by_rho(self, cql_pp, index_to_cut=0):
+        """
+        index_to_cut allows for truncation at the edge of the rho grid. 
+        """
+        rya = cql_pp.rya[:(-1 - index_to_cut)]
+        enerkev = cql_pp.enerkev
+        v_cql = np.sqrt(2*enerkev*1000*1.6022e-19 / self.species_dict['d']['mass'])
+
+        F_of_v_indexable_by_rho = np.zeros((len(rya), len(v_cql)))
+
+        for ir in range(len(rya)):
+            f_integrated_over_pitch, ekev = cql_pp.integrate_distribution_over_pitch_angle(gen_species_index=0, rho_index=ir)
+            F_of_v_indexable_by_rho[ir, :] = f_integrated_over_pitch
+
+        return rya, v_cql, F_of_v_indexable_by_rho
+
+
+    def build_far3d_outfile_from_cql3d(self, rho_array_for_far3d, cql_pp, E_NBI_kev, num_iter_max=10000, index_to_cut=0):
+        # grab the cql3d pitch integrated distribution function at every rho. 
+        rya, v_cql, F_of_v_indexable_by_rho = self.convert_cql3d_distribution_into_F_of_v_indexable_by_rho(cql_pp, index_to_cut=index_to_cut)
+        kev_to_J = 1.6022e-19 * 1000
+
+        # next, build the profile interpolators 
+        self.get_energetic_profiles(rho_array=rya, 
+                                    v_array=v_cql, 
+                                    F_of_v_indexable_by_rho=F_of_v_indexable_by_rho, 
+                                    E_NBI_kev=E_NBI_kev, 
+                                    num_iter_max=num_iter_max, 
+                                    return_arrays=False)
+        
+        # use the interpolators to build the Far3D profiles
+        nbulk_profile_for_far3d = self.nbulks_interp(rho_array_for_far3d)
+        Tbulk_profile_for_far3d = self.Tbulks_interp(rho_array_for_far3d)
+        p_kPa_bulk = nbulk_profile_for_far3d * Tbulk_profile_for_far3d * kev_to_J / 1000
+
+        nNBI_profile_for_far3d = self.nNBIs_interp(rho_array_for_far3d)
+        TNBI_profile_for_far3d = self.TNBIs_interp(rho_array_for_far3d)
+        p_kPa_NBI = nNBI_profile_for_far3d * TNBI_profile_for_far3d * kev_to_J / 1000
+
+
+        nRF_profile_for_far3d = self.nRFs_interp(rho_array_for_far3d)
+        TRF_profile_for_far3d = self.TRFs_interp(rho_array_for_far3d)
+        p_kPa_RF = nRF_profile_for_far3d * TRF_profile_for_far3d * kev_to_J / 1000
+        self.p_kPa_RF = p_kPa_RF
+
+        # build the electron temperature and density profile 
+
+        ne_profile_for_far3d = self.ne_interpolator_m3(rho_array_for_far3d)
+        Te_profile_for_far3d = self.Te_interpolator_kev(rho_array_for_far3d)
+        p_kPa_e = ne_profile_for_far3d * Te_profile_for_far3d * kev_to_J / 1000
+
+        thermal_pressure = p_kPa_bulk + p_kPa_e
+        equilibrium_pressure = thermal_pressure + p_kPa_NBI + p_kPa_RF
+
+        # load up the profiels for export to far3d 
+        self.load_profile(profile_name="rho_e", profile_array=rho_array_for_far3d)
+
+        # bulk
+        self.load_profile(profile_name="den_ion_e", profile_array=(nbulk_profile_for_far3d/1e20))
+        self.load_profile(profile_name="temp_ion_e", profile_array=Tbulk_profile_for_far3d)
+
+        # NBI
+        self.load_profile(profile_name="den_beam_e", profile_array=(nNBI_profile_for_far3d/1e20))
+        self.load_profile(profile_name="temp_beam_e", profile_array=TNBI_profile_for_far3d)   
+
+        # RF 
+        self.load_profile(profile_name="den_alpha_e", profile_array=(nRF_profile_for_far3d/1e20))
+        self.load_profile(profile_name="temp_alpha_e", profile_array=TRF_profile_for_far3d)   
+
+        # electrons
+        self.load_profile(profile_name="den_elec_e", profile_array=(ne_profile_for_far3d/1e20))
+        self.load_profile(profile_name="temp_elec_e", profile_array=Te_profile_for_far3d)  
+
+        # pressures 
+        self.load_profile(profile_name="pres_thermal_e", profile_array=thermal_pressure)
+        self.load_profile(profile_name="pres_beam_e", profile_array=p_kPa_NBI)
+        self.load_profile(profile_name="pres_equil_e", profile_array=equilibrium_pressure)
+
+        # impurity -- assume very small, Yashika used 0.1 before 
+        impurity_density = np.ones_like(rho_array_for_far3d) * 0.01
+        self.load_profile(profile_name='den_imp_e', profile_array=impurity_density)
+
+        # finally, interpolate the q-profile onto the grifd and load up. 
+        q_eqdsk = self.eqdsk['qpsi']
+        psi_n = np.linspace(0, 1, self.eqdsk['nW'])
+        phi = cumulative_trapezoid(q_eqdsk, psi_n, initial=0)
+        phi_n = phi / phi[-1]
+        rho_tor = np.sqrt(phi_n)
+        q_interp = interp1d(rho_tor, q_eqdsk)
+        q_far3d = q_interp(rho_array_for_far3d)
+
+        self.load_profile(profile_name='qprof', profile_array=q_far3d)
+
+        # set the rotation profiles to zero. 
+
+        self.load_profile(profile_name='tor_rot_vel_e', profile_array=rho_array_for_far3d*0.0)
+        self.load_profile(profile_name='pol_rot_vel_e', profile_array=rho_array_for_far3d*0.0)
+
+        self.rho_array_for_far3d = rho_array_for_far3d
+
+    def plot_profiles(self, figsize=(16,16)):
+            """
+            Plots all 16 FAR3d profiles in a 4x4 grid against rho_array.
+            """
+            rho_array = self.rho_array_for_far3d
+            # Create a 4x4 grid of subplots. sharex=True keeps the x-axis aligned.
+            fig, axes = plt.subplots(9, 2, figsize=figsize, sharex=True)
+            axes = axes.flatten()
+
+            # A dictionary to give the y-axis labels proper formatting and units
+            display_labels = {
+                "rho_e": "Normalized Rho",
+                "qprof": "Safety Factor (q)",
+                "den_beam_e": "Beam Density (10^20 m^-3)",
+                "den_ion_e": "Bulk Ion Density (10^20 m^-3)",
+                "den_elec_e": "Electron Density (10^20 m^-3)",
+                "den_alpha_e": "RF Ion Density (10^20 m^-3)",
+                "den_imp_e": "Impurity Density (10^20 m^-3)",
+                "temp_beam_e": "Beam Temp (keV)",
+                "temp_ion_e": "Bulk Ion Temp (keV)",
+                "temp_elec_e": "Electron Temp (keV)",
+                "temp_alpha_e": "RF Ion Temp (keV)",
+                "pres_beam_e": "Beam Pressure (kPa)",
+                "pres_thermal_e": "Thermal Pressure (kPa)",
+                "pres_equil_e": "Equil. Pressure (kPa)",
+                "tor_rot_vel_e": "Toroidal Rot. (km/s)",
+                "pol_rot_vel_e": "Poloidal Rot. (km/s)"
+            }
+
+            # Loop through the 16 headers and plot each one
+            for i, header in enumerate(self.headers):
+                ax = axes[i]
+                
+                
+                y_data = self.case_txt_dict[header] 
+                
+                ax.plot(rho_array, y_data, linewidth=2, color='darkred')
+                
+                # Formatting to make it readable
+                ax.set_title(header, fontsize=11, fontweight='bold')
+                ax.set_ylabel(display_labels.get(header, ""), fontsize=9)
+                ax.grid(True, linestyle='--', alpha=0.7)
+                
+                ax.set_xlabel("Normalized Rho", fontsize=10)
+
+            # after all the internal profiles, also plot the RF pressure profile 
+            
+            ax = axes[-2]
+            ax.plot(rho_array, self.p_kPa_RF, linewidth=2, color='darkred')
+            
+            # Formatting to make it readable
+            ax.set_title('RF pressure', fontsize=11, fontweight='bold')
+            ax.set_ylabel('RF Pressure (kPa)', fontsize=9)
+            ax.grid(True, linestyle='--', alpha=0.7)
+            
+            ax.set_xlabel("Normalized Rho", fontsize=10)
+            # Automatically adjust spacing so titles and labels don't overlap
+            plt.tight_layout()
+            plt.show()
+
+    def calculate_normalized_cyclotron_freq(self):
+        """
+        Calculates the dimensionless cyclotron frequency (omcy) for FAR3d.
+        
+        B0: Vacuum magnetic field at axis (Tesla)
+        R0: Major radius (m)
+        n_i0: Core bulk ion density (10^20 m^-3) -> from your profile at rho=0
+        m_fast_amu: Mass of the fast species in AMU (e.g., 2.0 for Deuterium)
+        bulk_ion_amu: Mass of the bulk ions in AMU
+        """
+        # read eqdsk 
+        B0 = self.eqdsk['bcentr']
+        R0 = self.eqdsk['rcentr']
+        n_i0 = self.nbulks_interp(self.rho_array_for_far3d[0])
+
+        # Physics constants
+        q_e = 1.602e-19       # Coulombs
+        mu_0 = 4 * np.pi * 1e-7 # Vacuum permeability
+        
+        # 1. Alfvén velocity
+        rho_mass = (n_i0) * (self.species_dict[self.species]['mass']) # Core mass density (kg/m^3)
+        v_A0 = B0 / np.sqrt(mu_0 * rho_mass)            # m/s
+        
+        # 2. Alfvén frequency
+        omega_A0 = v_A0 / R0                            # rad/s
+        
+        # 3. Fast particle cyclotron frequency
+        m_fast_kg = self.species_dict[self.species]['mass']
+        omega_c = (q_e * B0) / m_fast_kg                # rad/s
+        
+        # 4. Dimensionless FAR3d input
+        omcy = omega_c / omega_A0
+        
+        print(f"Calculated v_A0: {v_A0:.2e} m/s")
+        print(f"Calculated FAR3d omcy: {omcy:.2f}")
+        
+        return omcy
+    
+    def calculate_normalized_larmor_radius(self, temperature_header_name):
+        temp_kev = self.case_txt_dict[temperature_header_name][0]
+        # conver to jouls
+        temp_jouls = temp_kev * 1.6022e-19 * 1000
+        minor_radius = (max(self.eqdsk['rbbbs']) - min(self.eqdsk['rbbbs'])) / 2
+        mass_kg = self.species_dict[self.species]['mass']
+
+        velocity = np.sqrt(temp_jouls*2/mass_kg)
+        B0 = self.eqdsk['bcentr']
+        rL = mass_kg * velocity / (B0 * self.species_dict[self.species]['charge']) 
+        return  rL / minor_radius
+
+
+    def write_far3d_parameters(self, filename="far3d_params.txt", 
+                               eq_name="woutb",
+                               ext_prof_name="SPARC_with_alpha.txt",
+                               ext_prof_len=100,
+                               m_dynamic=[12, 11, 10, 9, 8],
+                               n_dynamic=[10, -10],
+                               leqdim=23):
+        """
+        Generates the main FAR3d parameters input file.
+        Automatically formats Python lists for m and n modes into the 
+        rigid Fortran repeat syntax (e.g., 5*10) and calculates total dimensions.
+        """
+        
+        # --- MODE FORMATTING LOGIC ---
+        # 1. Build Equilibrium Modes (0 to leqdim-1)
+        m_eq = list(range(leqdim))
+        mmeq_str = ",".join(map(str, m_eq))
+        nneq_str = f"{leqdim}*0"
+        
+        # 2. Build Dynamic Modes
+        mm_lines = []
+        nn_parts = []
+
+        # calculate cyclotron frequencies 
+        omcy = self.calculate_normalized_cyclotron_freq()
+        omcyalp = omcy # these are the same species 
+
+        # calculate larmor radii
+        iflr = self.calculate_normalized_larmor_radius(temperature_header_name='temp_ion_e')
+        r_epflr = self.calculate_normalized_larmor_radius(temperature_header_name='temp_beam_e')
+        r_epflralp = self..calculate_normalized_larmor_radius(temperature_header_name='temp_alpha_e')
+        
+        for n in n_dynamic:
+            # Physics check: if n is negative, m must be negative to preserve helicity (q = m/n)
+            sign = -1 if n < 0 else 1
+            m_current = [m * sign for m in m_dynamic]
+            
+            # Format to Fortran strings
+            mm_lines.append(",".join(map(str, m_current)))
+            nn_parts.append(f"{len(m_current)}*{n}")
+            
+        # 3. Combine Dynamic and Equilibrium blocks
+        mm_lines.append(mmeq_str)
+        nn_parts.append(nneq_str)
+        
+        mm_str = "\n".join(mm_lines)
+        nn_str = ",".join(nn_parts)
+        
+        # Calculate total dimension for ldim
+        ldim = (len(m_dynamic) * len(n_dynamic)) + leqdim
+        
+        # --- TEMPLATE INJECTION ---
+        template = f"""============================/ MAIM NPUT VARIABLES \===================================
+!!!!!!!!!!! namelist_on: if 1 new run, namelist is used
+0
+!!!!!!!!!!! nstres: if 0 new run, if 1 the run is a continuation
+0
+!!!!!!!!!!! numrun: run number
+0001
+!!!!!!!!!!! numruno: name of the previous run output
+0884z
+!!!!!!!!!!! numvac: run number index
+41503
+!!!!!!!!!!! nonlin: linear run if 0, non linear run if 1 
+0
+!!!!!!!!!!! ngeneq: equilibrium input (only VMEC available now) 
+1
+!!!!!!!!!!! eq_name: equilibrium name 
+{eq_name}
+!!!!!!!!!!! maxstp: simulation time steps 
+1000
+!!!!!!!!!!! dt0: simulation time step 
+2
+!!!!!!!!!!! ldim: total number of poloidal modes (equilibrium + dynamic) 
+{ldim}
+!!!!!!!!!!! leqdim: equilibrium poloidal modes 
+{leqdim}
+!!!!!!!!!!! jdim: number of radial points
+1000
+!!!!!!!!!!! ext_prof: include external profiles if 1
+1
+!!!!!!!!!!! ext_prof_name: external profile file name
+{ext_prof_name}
+!!!!!!!!!!! ext_prof_len: number of lines in the external profile
+{ext_prof_len}
+!!!!!!!!!!! iflr_on: activate thermal ion FLR damping effects if 1
+0
+!!!!!!!!!!! epflr_on: activate fast particle FLR damping effects if 1
+0
+!!!!!!!!!!! ieldamp_on: activate electron-ion Landau damping effect if 1
+0
+!!!!!!!!!!! twofl_on: activate two fluid effects if 1
+0
+!!!!!!!!!!! alpha_on: activate a 2nd fast particle species if 1
+1
+!!!!!!!!!!! Trapped_on: activate correction for trapped 1st fast particle species if 1
+1
+!!!!!!!!!!! matrix_out: activate eigensolver output
+.false. 
+!!!!!!!!!!! m0dy: equilibrium modes as dynamic
+0
+!!!!!!!!!!! nopsievol_on: if 1, no nonlinear evolution of the poloidal flux
+1
+!!!!!!!!!!! noprevol_on: if 1, no nonlinear evolution of the thermal pressure
+1
+!!!!!!!!!!! nonfevol_on: no nonlinear evolution of the first EP population density
+1
+!!!!!!!!!!! nonalpevol_on: no nonlinear evolution of the second EP population density
+1
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+==================================/ MODEL PARAMETERS \===================================
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!! MODES INCLUDED IN THE MODEL !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! mm: poloidal dynamic and equilibrium modes                                                              
+{mm_str}
+!!!!!!!!!!! nn: toroidal dynamic and equilibrium modes
+{nn_str}
+!!!!!!!!!!! mmeq: poloidal equilibrium modes
+{mmeq_str}                                                                                                   
+!!!!!!!!!!! nneq: toroidal equilibrium modes
+{nneq_str}
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PERTURBATION !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! ipert: different options to drive a perturbation in the equilibria
+1
+!!!!!!!!!!! widthi: size of the perturbation. 
+1.e-140
+!!!!!!!!!!! Auto_grid_on: auto grid spacing option
+1
+!!!!!!!!!!! ni: number of points interior to the island
+499
+!!!!!!!!!!! nis: number of points in the island
+251
+!!!!!!!!!!! ne: number of points exterior to the island
+250
+!!!!!!!!!!! delta: normalized width of the uniform fine grid (island)
+0.10
+!!!!!!!!!!! rc: center of the fine grid (island) along the normalized minor radius
+0.625
+!!!!!!!!!!! Edge_on: activates the VMEC data extrapolation
+1
+!!!!!!!!!!! edge_p: grid point from where the VMEC data is extrapolated
+990
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PLASMA PARAMETERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! gamma: adiabatic index
+0.0
+!!!!!!!!!!! s: magnetic Lundquist number
+5.e6
+!!!!!!!!!!! betath_factor: thermal beta factor. Originally 1.
+1
+!!!!!!!!!!! ietaeq: resistivity profile type (if 5 the electron temperature is used)
+1
+!!!!!!!!!!! spe1: species first EP population
+2
+!!!!!!!!!!! bet0_f: fast particle beta
+0.0
+!!!!!!!!!!! spe2: species second EP population
+2
+!!!!!!!!!!! bet0_falp: 2nd species fast particle beta. 
+0.10
+!!!!!!!!!!! omcy: normalized fast particle cyclotron frequency
+{omcy}
+!!!!!!!!!!! omcyb: normalized helicaly trapped fast particle frequency. 
+0.165
+!!!!!!!!!!! rbound: normalized helicaly trapped bound length. 
+0.7
+!!!!!!!!!!! omcyalp: normalized 2nd species fast particle cyclotron frequency. 
+{omcyalp}
+!!!!!!!!!!! itime: time normalization option
+2
+!!!!!!!!!!! dpres: electron pressure normalized to the total pressure (two fluid effects)
+0.35
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DIFFUSIVITIES !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! stdifp: thermal pressure eq. diffusivity
+0
+!!!!!!!!!!! stdifu: vorticity eq. diffusivity
+0
+!!!!!!!!!!! stdifv: thermal particle parallel velocity eq. diffusivity
+0
+!!!!!!!!!!! stdifnf: fast particle density eq. diffusivity
+0
+!!!!!!!!!!! stdifvf: fast particle parallel velocity eq. diffusivity
+0
+!!!!!!!!!!! stdifnfalp: fast particle density eq. diffusivity
+0
+!!!!!!!!!!! stdifvfalp: fast particle parallel velocity eq. diffusivity
+0
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! LANDAU CLOSURE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! LcA0: Landau closure 1
+2.718
+!!!!!!!!!!! LcA1: Landau closure 2
+-1.311
+!!!!!!!!!!! LcA2: correction to the fast particle beta
+0.889
+!!!!!!!!!!! LcA3: correction to the ratio between fast particle thermal velocity and Alfven velocity
+1.077
+!!!!!!!!!!! LcA0alp: Landau closure 1 2nd species
+2.718
+!!!!!!!!!!! LcA1alp: Landau closure 2 2nd species
+-1.311
+!!!!!!!!!!! LcA2alp: correction to the 2nd species fast particle beta
+0.889
+!!!!!!!!!!! LcA3alp: correction to the ratio between fast particle thermal velocity and Alfven velocity 2nd species
+1.077
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DAMPINGS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! omegar: eigenmode frequency without damping effects. Alfven frequency is 764 kHz.
+0.7
+!!!!!!!!!!! iflr: thermal ions larmor radius normalized to the minor radius. 
+{iflr}
+!!!!!!!!!!! r_epflr: energetic particle larmor radius normalized to the minor radius. 
+{r_epflr}
+!!!!!!!!!!! r_epflralp: 2nd species energetic particle larmor radius normalized to the minor radius.
+{r_epflralp}
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! OUTPUT !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! lplots: number of eigenfunction modes in the output files
+10
+!!!!!!!!!!! nprint: number of step for an output in farprt file
+100
+!!!!!!!!!!! ndump: number of step for an output 
+1000
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! OTHER PARAMETERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! DIIID_u: turn on to use the same units than TRANSP output in the external profiles (cm not m)
+0
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+================================/ SELF PROFILES PARAMETERS \============================
+!!!!!!!!!!! EP_dens_on: user defined fast particle density profile (if 1)
+0
+!!!!!!!!!!! Adens: fast particle density profile flatness
+8.5
+!!!!!!!!!!! Bdens: location of the fast particle density profile gradient
+0.4
+!!!!!!!!!!! Alpha_dens_on: user defined 2nd species fast particle density profile (if 1)
+0
+!!!!!!!!!!! Adensalp: 2nd species fast particle density profile flatness
+7
+!!!!!!!!!!! Bdensalp: location of the 2nd species fast particle density profile gradient
+0.4
+!!!!!!!!!!! EP_vel_on: user defined fast particle vth/vA0 profile (if 1). 
+0
+!!!!!!!!!!! Alpha_vel_on: user defined 2nd species fast particle vth/vA0 profile (if 1)
+0
+!!!!!!!!!!! q_prof_on: the safety factor profile of the external profile is used (is 1)
+0
+!!!!!!!!!!! Eq_vel_on: the equilibrium toroidal velocity profile of the external profile is used (is 1)
+0
+!!!!!!!!!!! Eq_velp_on: the equilibrium poloidal velocity profile of the external profile is used (if 1)
+0
+!!!!!!!!!!! Eq_Presseq_on: the equilibrium pressure profile of the external profile is used (is 1)
+0
+!!!!!!!!!!! Eq_Presstot_on: the equilibrium + fast particle pressure profiles of the external profile is used (is 1)
+1
+!!!!!!!!!!! deltaq: safety factor displacement (only tokamak eq.)
+0
+!!!!!!!!!!! deltaiota: iota displacement (only stellarator eq.)
+0
+!!!!!!!!!!! etascl: user defined constant resistivity (if ietaeq=2)
+1
+!!!!!!!!!!! eta0: user defined resistivity profile (if ietaeq=3)
+1
+!!!!!!!!!!! reta: user defined resistivity profile (if ietaeq=3)
+0.5
+!!!!!!!!!!! etalmb: user defined resistivity profile (if ietaeq=3)
+0.5
+!!!!!!!!!!! cnep: user defined thermal plasma density profile 
+5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,
+-9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,
+3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,
+-1.160818784526462E+03,  2.100700986027593E+02
+!!!!!!!!!!! ctep: user defined thermal electron plasma temperature profile
+2.466297479423131E+00, -3.123519794977899E+00,  1.455166487731591E+01,
+-8.288042333625850E+01,  3.310397776819081E+02, -9.891030935273041E+02,
+2.133646774676442E+03, -3.082790956275732E+03,  2.757324727437074E+03,
+-1.367187266111290E+03,  2.864529219889411E+02
+!!!!!!!!!!! cnfp: user defined energetic particles density profile
+1.5, 0.1, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! cvep: user defined thermal ions parallel velocity profile (only for thermal ion FLR effects)
+5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,
+-9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,
+3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,
+-1.160818784526462E+03,  2.100700986027593E+02
+!!!!!!!!!!! cvfp: user defined energetic particles parallel velocity profile
+0.68, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! cnfpalp: user defined 2nd species energetic particles density profile
+5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,
+-9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,
+3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,
+-1.160818784526462E+03,  2.100700986027593E+02
+!!!!!!!!!!! cvfpalp: user defined 2nd species energetic particles parallel velocity profile
+0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! eqvt: user defined equilibrium thermal toroidal velocity profile
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! eqvp: user defined equilibrium thermal poloidal velocity profile
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"""
+
+        with open(filename, 'w') as f:
+            f.write(template)
+            
+        print(f"Successfully generated FAR3d parameters file: {filename}")
+        print(f"-> Total Modes (ldim) Calculated: {ldim}")
+
+
+        
+
+        
+        
+
+
+         
+         
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
+
+
+
+
+
+    
+
+
+    
         
         
 
