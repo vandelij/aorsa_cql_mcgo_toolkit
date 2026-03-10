@@ -12,6 +12,7 @@ from matplotlib import cm
 from matplotlib import ticker, cm
 from scipy.interpolate import interp1d, RectBivariateSpline, PchipInterpolator, RegularGridInterpolator
 from scipy.optimize import curve_fit
+from scipy.integrate import trapezoid
 import os, sys
 import netCDF4
 import f90nml as f90
@@ -227,6 +228,15 @@ class MCGO_Post_Process:
 
         Bmax = float(self.getBStrength(R, Zcentr))
         return Bmax, R, Zcentr, rho_guess
+
+    def f_integrated_over_pitch(self, rho_idx):
+        pitch_grid_rad = self.ptchbnd
+        f_v_theta = self.vdstb[rho_idx, :, :]
+        sin_theta_2pi = 2 * np.pi * np.sin(pitch_grid_rad)
+        F_v = trapezoid(f_v_theta * sin_theta_2pi, x=pitch_grid_rad) * self.vbnd**2 
+        return F_v
+
+        
     
     def plot_distribution_function_at_rho(
         self,

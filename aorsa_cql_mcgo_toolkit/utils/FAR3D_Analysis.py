@@ -56,7 +56,7 @@ class Far3D_Analysis:
         self.nRF = []
         self.TRF = []
 
-        self.headers = flux_file_columns = [
+        self.headers = [
                     "rho_e",           # 1. Normalized Rho
                     "qprof",           # 2. Safety factor q
                     "den_beam_e",      # 3. Beam Ion Density (10^20 m^-3)
@@ -74,6 +74,19 @@ class Far3D_Analysis:
                     "tor_rot_vel_e",   # 15. Toroidal Rotation (km/s)
                     "pol_rot_vel_e"    # 16. Poloidal Rotation (km/s)
                 ]
+        
+        self.output_types = [
+            "br",
+            "bth",
+            "phi",
+            "pr",
+            "psi",
+            "uzt",
+            "vr",
+            "vth",
+            "vthprlf",
+            "nf"
+        ]
 
     def process_eqdsk(self):
         # unpack the equilibrium magnetics
@@ -211,6 +224,96 @@ class Far3D_Analysis:
 
         print(f'File {filename} loaded. Access by key {name} from self.data_dict')
 
+    def read_all_profile_outputs_and_store(self, directory, run_indicator):
+        for name in self.output_types:
+            file_name = directory + f'/{name}_{run_indicator}'
+            print(f'Loading {name}')
+            self.load_mode_file(filename=file_name, name=name)
+
+    def find_maximum_growth_rate_and_frequency(self, run_indicator, directory):
+        far3d_output_file = directory + f'/farprt{run_indicator}'
+        best = {'gam': -1e30, 'om_r': 0.0}
+        pattern = re.compile(
+            r'^\s*(?:psi|phi|pr)\s*:\s*m=\s*\d+\s+n=\s*\d+\s*gam=\s*([0-9E+\-\.]+)\s*om_r=\s*([0-9E+\-\.]+)'
+        )
+        with open(far3d_output_file) as f:
+            for line in f:
+                m = pattern.match(line)
+                if not m: continue
+                gam, omr = float(m.group(1)), float(m.group(2))
+                if gam > best['gam']:
+                    best['gam'], best['om_r'] = gam, omr
+
+        if best['gam'] < -1e29:
+            raise RuntimeError("No mode lines found in farprt output")
+        #print(f"[norm] Selected mode: γ = {best['gam']:.3e}  ω_r = {best['om_r']:.3e}  (τₐ⁻¹)")
+        return best['gam'], best['om_r']
+    
+    def calculate_alfven_angular_freq(self):
+        # read eqdsk 
+        B0 = self.eqdsk['bcentr']
+        R0 = self.eqdsk['rcentr']
+        n_i0 = self.loaded_profile_txt['den_ion_e'][0] * 1e20 # convert back to real units 
+
+        # Physics constants
+        q_e = 1.602e-19       # Coulombs
+        mu_0 = 4 * np.pi * 1e-7 # Vacuum permeability
+        
+        # 1. Alfvén velocity
+        rho_mass = (n_i0) * (self.species_dict[self.species]['mass']) # Core mass density (kg/m^3)
+        v_A0 = B0 / np.sqrt(mu_0 * rho_mass)            # m/s
+        
+        # 2. Alfvén frequency
+        omega_A0 = v_A0 / R0   # rad/s
+
+        return omega_A0
+
+
+
+    def plot_all_output_profiles(self, run_indicator, directory, figsize=(20,20)):
+        num_plots = len(self.output_types) - 1
+        if num_plots % 2 == 0:
+            num_rows = int(num_plots / 2)
+        else:
+            num_rows = int(num_plots / 2) + 1
+
+        fig, axs = plt.subplots(num_rows, 2, figsize=figsize)
+        axes = axs.flatten()
+
+        # first, find the fastest growing mode and convert to kHz 
+        omega_A0 = self.calculate_alfven_angular_freq()
+        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(run_indicator=run_indicator, directory=directory)
+        un_normalize = omega_A0  / (2 * np.pi * 1000) # to kHz
+
+        gamma_kHz = gamma * un_normalize
+        omega_r_kHz = omega_r * un_normalize
+
+        # loop over data and make mass output plots 
+        for i, name in enumerate(self.output_types):
+            data_dict = self.data_dict[name]
+            rgrid = data_dict['r']
+            data = data_dict['data']
+            ns = data_dict['ns']
+            ms = data_dict['ms']
+            for imode in range(len(ns)):
+                n = ns[imode]
+                m = ms[imode]
+                profile = data[:,imode]
+                label = f'm/n: {m}/{n}'
+                axes[i].plot(rgrid, profile, label=label)
+            axes[i].grid()
+            axes[i].set_title(f'Name: {name}')
+            axes[i].legend()
+
+        title_string = r'$\gamma \tau_{A}$ ='+ f' {gamma:.3f}\n' + r'$\gamma$ = ' + f'{gamma_kHz:.3f} kHz\n' + r'$\omega_r$ =' + f' {omega_r_kHz:.3f} kHz' 
+
+        fig.suptitle(title_string, fontsize=30, fontweight='bold')
+
+
+            
+
+
+
     def get_perturbed_RZ(self, R, Z, far3d_output_name, psi_norm_max=0.95, phase=0):
         psi_norm = self.getpsirzNorm(R,Z).item()
         if psi_norm < psi_norm_max:
@@ -226,7 +329,7 @@ class Far3D_Analysis:
 
             for im in range(num_pos_ms):
                 m = ms[im]
-                print(f'm: {m}')
+                #print(f'm: {m}')
                 # fr_cos_term = file_dict['interpolators'][im](rho)
                 # fr_sin_term = file_dict['interpolators'][im + num_pos_ms](rho)
                 fr_sin_term = file_dict['interpolators'][im](rho)
@@ -281,6 +384,45 @@ class Far3D_Analysis:
             c1, ax=ax, label=f"{far3d_output_name} magnitude"
         )
 
+    def read_far3d_run_txt_file(self, in_txt_file_path):
+        """
+        Reads a formatted FAR3d profile text file and returns a dictionary
+        mapping column names to 1D numpy arrays, identical to case_txt_dict.
+        """
+        import numpy as np
+        
+        # 1. Read the file to find where the header ends and data begins
+        with open(in_txt_file_path, 'r') as f:
+            lines = f.readlines()
+            
+        data_start_idx = 0
+        for i, line in enumerate(lines):
+            # Search for the column header line
+            if line.strip().startswith("rho_e"):
+                data_start_idx = i + 1
+                break
+                
+        if data_start_idx == 0:
+            raise ValueError(f"Could not find the 'rho_e' header line in {in_txt_file_path}")
+
+        # 2. Load the numeric block into a 2D numpy array
+        # skiprows skips all the text headers we just counted
+        data = np.loadtxt(in_txt_file_path, skiprows=data_start_idx)
+        
+        # 3. Reconstruct the dictionary using your class's headers list
+        loaded_dict = {}
+        for i, name in enumerate(self.headers):
+            # Extract the i-th column and assign it to the header name
+            loaded_dict[name] = data[:, i]
+            
+        print(f"Successfully loaded profiles from {in_txt_file_path}")
+        print(f"Loaded {len(loaded_dict['rho_e'])} radial grid points.")
+        
+        self.loaded_profile_txt = loaded_dict #TODO now you can calc the alfven frequency 
+
+
+
+# switching to pre-processing functions for run setup. 
 
     def load_profile(self, profile_name, profile_array):
         if profile_name not in self.headers:
@@ -399,6 +541,9 @@ class Far3D_Analysis:
 
     def load_electron_density_profile(self, rho, ne):
         self.ne_interpolator_m3  = interp1d(rho, ne, kind='linear')
+
+    def load_bulkion_density_profile(self, rho, ni):
+        self.ni_interpolator_m3  = interp1d(rho, ni, kind='linear')
 
     def load_ion_temperature_profile(self, rho, Ti):
         self.Ti_interpolator_kev  = interp1d(rho, Ti, kind='linear')
@@ -850,6 +995,122 @@ class Far3D_Analysis:
         nNBI = nNBI_guess 
 
         return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+    
+    def fit_3_maxwellians_to_speed_distribution_bulk_fit_NBI_RF_moments(self, v, F, E_NBI_kev, rho, mode='cql3d', mcgo_energy_filter_kev=30):
+        """_summary_
+
+        Parameters
+        ----------
+        v : _type_
+            _description_
+        F : _type_
+            _description_
+        E_NBI_kev : _type_
+            _description_
+        rho : _type_
+            _description_
+        mode : str, optional
+            Can be set to 'cql3d' or 'mcgo', by default 'cql3d'. changes how the distribution function is processed since mcgo thermal bulk needs to be removed. 
+        mcgo_energy_filter_kev : float
+            Only used in mode = 'mcgo'. Should match the mcgo/p2f energy filter used. For truncating the NBI distribution to not count ash.  
+
+        Returns
+        -------
+        _type_
+            _description_
+
+        Raises
+        ------
+        ValueError
+            _description_
+        """
+
+        F_interp = interp1d(v, F, kind='linear')
+
+
+        E_NBI = E_NBI_kev * 1000 * 1.6022e-19
+        v_NBI = np.sqrt(2*E_NBI / self.species_dict[self.species]['mass'])
+
+        if v[-1] < v_NBI:
+            raise ValueError(f'The velocity grid supplied does not extend to beam input energy {E_NBI_kev} keV')
+        
+        n_tot = self.integrate_speed_distribution(v=v, F=F)
+        n_bulk_guess = n_tot*0.99 # small factor to make sure the optimization is happy
+        nbulk_from_profile = self.ni_interpolator_m3(rho)
+
+        Tbulk_kev = self.Ti_interpolator_kev(rho)
+        Te_bulk_kev = self.Te_interpolator_kev(rho) 
+
+
+        if mode == 'cql3d': 
+            v_thermal = np.sqrt(Tbulk_kev*1000*1.6022e-19*2/self.species_dict[self.species]['mass'])
+
+            thermal_speeds = np.linspace(20000, v_NBI/np.sqrt(3), len(v))
+
+
+            F_thermal_range = F_interp(thermal_speeds)
+
+            # fit just the maxwellian
+            initial_guess = [n_bulk_guess, Tbulk_kev]
+            lower_bounds = [n_bulk_guess/2, Tbulk_kev/2]
+            upper_bounds = [n_tot, Tbulk_kev*2]        
+
+            # now, actually perform the optimization 1: fitting the thermal bulk 
+            popt, pcov = curve_fit(
+                self.single_maxwellain_to_fit, 
+                thermal_speeds, 
+                F_thermal_range, 
+                p0=initial_guess, 
+                bounds=(lower_bounds, upper_bounds)
+            )   
+            # unpack result 
+            nbulk = popt[0]
+            Tbulk = popt[1]
+
+        elif mode == 'mcgo':
+            # for now, just assume the maxwellian due to the bulk is uneffected by NBI/RF. 
+            nbulk = nbulk_from_profile.item()
+            Tbulk = Tbulk_kev.item()
+        else:
+            raise ValueError(f"Mode {mode} not understood. Allowed modes are 'cql3d' and 'mcgo'.")
+
+        # nbulk = self.integrate_speed_distribution(v=thermal_speeds, F=F_thermal_range)
+        # Tbulk = self.calculate_effective_temperature(varray=thermal_speeds, farray=F_thermal_range, species=self.species, F_type='speed')
+
+        # subtract off the bulk 
+        F_rf_nbi = F - self.maxwell_speed_distribution(s=v, n=nbulk, T=Tbulk, species=self.species)
+        # make sure negative values are ignored. 
+        F_rf_nbi[F_rf_nbi < 0] = 0.0
+        F_rf_nbi_interp = interp1d(v, F_rf_nbi, kind='linear')
+
+        # calculate the speed at 5 eV to truncate noise near v = 0 inb the cql3d distribution. 
+        E_5eV = 5*1.6022e-19
+        mass = self.species_dict[self.species]['mass']
+        v_5eV = np.sqrt(E_5eV * 2 / mass)
+
+        E_cuttof_mcgo = mcgo_energy_filter_kev * 1000 *1.6022e-19
+        v_mcgo_cuttoff = np.sqrt(E_cuttof_mcgo * 2 / mass)
+
+        # NBI_speeds = np.linspace(v_5eV, v_NBI*1.2, len(v))
+        # RF_speeds = np.linspace(v_NBI*1.2, v[-1], len(v))
+
+        if mode == 'cql3d':
+            NBI_speeds = np.linspace(v_5eV, v_NBI, len(v))
+        elif mode == 'mcgo':
+            NBI_speeds = np.linspace(v_mcgo_cuttoff, v_NBI, len(v))
+                                     
+        RF_speeds = np.linspace(v_NBI, v[-1], len(v))
+        F_rf_nbi_nbi_speeds = F_rf_nbi_interp(NBI_speeds)
+        F_rf_nbi_rf_speeds = F_rf_nbi_interp(RF_speeds)
+
+        # nbi 
+        nNBI = self.integrate_speed_distribution(v=NBI_speeds, F=F_rf_nbi_nbi_speeds)
+        TNBI = self.calculate_effective_temperature(varray=NBI_speeds, farray=F_rf_nbi_nbi_speeds, species=self.species, F_type='speed')
+
+        # RF 
+        nRF = self.integrate_speed_distribution(v=RF_speeds, F=F_rf_nbi_rf_speeds)
+        TRF = self.calculate_effective_temperature(varray=RF_speeds, farray=F_rf_nbi_rf_speeds, species=self.species, F_type='speed')
+        return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
 
 
 
@@ -914,7 +1175,7 @@ class Far3D_Analysis:
         #axs[1].set_xlim(xlim[0], xlim[1])
 
 
-    def get_energetic_profiles(self, rho_array, v_array, F_of_v_indexable_by_rho, E_NBI_kev, num_iter_max=10000, return_arrays=False):
+    def get_energetic_profiles(self, rho_array, v_array, F_of_v_indexable_by_rho, E_NBI_kev, num_iter_max=10000, return_arrays=False, mode='cql3d', mcgo_energy_filter_kev=30):
         num_rhos = len(rho_array)
 
         # initialize the profiles arrays 
@@ -929,7 +1190,8 @@ class Far3D_Analysis:
         print('Starting profile fitting routine.')
         for ir in range(num_rhos):
             rhoi = rho_array[ir]
-            fit = self.fit_3_maxwellians_to_speed_distribution_critical_speeds(v=v_array, F=F_of_v_indexable_by_rho[ir, :], E_NBI_kev=E_NBI_kev, rho=rhoi, num_iter_max=num_iter_max)
+            #fit = self.fit_3_maxwellians_to_speed_distribution_critical_speeds(v=v_array, F=F_of_v_indexable_by_rho[ir, :], E_NBI_kev=E_NBI_kev, rho=rhoi, num_iter_max=num_iter_max)
+            fit = self.fit_3_maxwellians_to_speed_distribution_bulk_fit_NBI_RF_moments(v=v_array, F=F_of_v_indexable_by_rho[ir, :], E_NBI_kev=E_NBI_kev, rho=rhoi, mode=mode, mcgo_energy_filter_kev=mcgo_energy_filter_kev)
             # unpack 
             nbulks[ir] = fit[0]
             Tbulks[ir] = fit[1]
@@ -962,7 +1224,8 @@ class Far3D_Analysis:
         """
         index_to_cut allows for truncation at the edge of the rho grid. 
         """
-        rya = cql_pp.rya[:(-1 - index_to_cut)]
+        end = -index_to_cut if index_to_cut > 0 else None
+        rya = cql_pp.rya[:end]
         enerkev = cql_pp.enerkev
         v_cql = np.sqrt(2*enerkev*1000*1.6022e-19 / self.species_dict['d']['mass'])
 
@@ -974,19 +1237,63 @@ class Far3D_Analysis:
 
         return rya, v_cql, F_of_v_indexable_by_rho
 
+    def convert_mcgo_distribution_into_F_of_v_indexable_by_rho(self, mcgo_pp):
+        rya = mcgo_pp.rho_grid
+        f = mcgo_pp.vdstb
+        v = mcgo_pp.vbnd
 
-    def build_far3d_outfile_from_cql3d(self, rho_array_for_far3d, cql_pp, E_NBI_kev, num_iter_max=10000, index_to_cut=0):
+        # grab the magnetic center 
+        rmaxis = mcgo_pp.eqdsk['rmaxis']
+
+        major_radius_grid = np.linspace(min(mcgo_pp.eqdsk['rbbbs']), max(mcgo_pp.eqdsk['rbbbs']), len(rya)) 
+
+        # sign_hfs_vs_lfs = np.zeros(len(major_radius_grid))
+        # for i in range(len(sign_hfs_vs_lfs)):
+        #     if major_radius_grid[i] < rmaxis:
+        #         sign_hfs_vs_lfs[i] = -1
+        #     else:
+        #         sign_hfs_vs_lfs[i] = 1
+
+        # signed_major_radius_grid = major_radius_grid * sign_hfs_vs_lfs
+        # num_pos_major_radii = len(signed_major_radius_grid[signed_major_radius_grid>0])
+        
+        # idx_of_lfs = np.where(signed_major_radius_grid > 0)[0]
+        idx_of_lfs = np.where(major_radius_grid >= rmaxis)[0]
+        num_lfs_major_radii = len(idx_of_lfs)
+        # set up F storage matrix 
+        F_of_v_idx_rho = np.zeros((num_lfs_major_radii, f.shape[1]))
+        new_rhos = np.zeros(num_lfs_major_radii)
+        for i in range(num_lfs_major_radii):
+            rho_index = idx_of_lfs[i]
+            new_rhos[i] = rya[rho_index]
+            F_of_v_idx_rho[i, :] = mcgo_pp.f_integrated_over_pitch(rho_idx=rho_index)
+
+        return new_rhos, v, F_of_v_idx_rho
+
+
+
+
+
+    def build_far3d_outfile_from_cql3d(self, rho_array_for_far3d, cql_or_mcgo_pp, E_NBI_kev, num_iter_max=10000, index_to_cut=0, mode='cql3d', mcgo_energy_filter_kev=30):
         # grab the cql3d pitch integrated distribution function at every rho. 
-        rya, v_cql, F_of_v_indexable_by_rho = self.convert_cql3d_distribution_into_F_of_v_indexable_by_rho(cql_pp, index_to_cut=index_to_cut)
+
+        if mode == 'cql3d':
+            rya, vs, F_of_v_indexable_by_rho = self.convert_cql3d_distribution_into_F_of_v_indexable_by_rho(cql_or_mcgo_pp, index_to_cut=index_to_cut)
+
+        elif mode == 'mcgo':
+            rya, vs, F_of_v_indexable_by_rho = self.convert_mcgo_distribution_into_F_of_v_indexable_by_rho(cql_or_mcgo_pp)
+
         kev_to_J = 1.6022e-19 * 1000
 
         # next, build the profile interpolators 
         self.get_energetic_profiles(rho_array=rya, 
-                                    v_array=v_cql, 
+                                    v_array=vs, 
                                     F_of_v_indexable_by_rho=F_of_v_indexable_by_rho, 
                                     E_NBI_kev=E_NBI_kev, 
                                     num_iter_max=num_iter_max, 
-                                    return_arrays=False)
+                                    return_arrays=False,
+                                    mode=mode,
+                                    mcgo_energy_filter_kev=mcgo_energy_filter_kev)
         
         # use the interpolators to build the Far3D profiles
         nbulk_profile_for_far3d = self.nbulks_interp(rho_array_for_far3d)
@@ -996,6 +1303,7 @@ class Far3D_Analysis:
         nNBI_profile_for_far3d = self.nNBIs_interp(rho_array_for_far3d)
         TNBI_profile_for_far3d = self.TNBIs_interp(rho_array_for_far3d)
         p_kPa_NBI = nNBI_profile_for_far3d * TNBI_profile_for_far3d * kev_to_J / 1000
+        self.p_kPa_NBI = p_kPa_NBI
 
 
         nRF_profile_for_far3d = self.nRFs_interp(rho_array_for_far3d)
@@ -1058,11 +1366,15 @@ class Far3D_Analysis:
 
         self.rho_array_for_far3d = rho_array_for_far3d
 
-    def plot_profiles(self, figsize=(16,16)):
+    def plot_profiles(self, figsize=(12,24), from_saved_file=False):
             """
             Plots all 16 FAR3d profiles in a 4x4 grid against rho_array.
             """
-            rho_array = self.rho_array_for_far3d
+            if from_saved_file:
+                rho_array = self.loaded_profile_txt['rho_e']
+            else:
+                rho_array = self.rho_array_for_far3d
+
             # Create a 4x4 grid of subplots. sharex=True keeps the x-axis aligned.
             fig, axes = plt.subplots(9, 2, figsize=figsize, sharex=True)
             axes = axes.flatten()
@@ -1091,8 +1403,10 @@ class Far3D_Analysis:
             for i, header in enumerate(self.headers):
                 ax = axes[i]
                 
-                
-                y_data = self.case_txt_dict[header] 
+                if from_saved_file:
+                    y_data = self.loaded_profile_txt[header]
+                else:
+                    y_data = self.case_txt_dict[header] 
                 
                 ax.plot(rho_array, y_data, linewidth=2, color='darkred')
                 
@@ -1104,16 +1418,16 @@ class Far3D_Analysis:
                 ax.set_xlabel("Normalized Rho", fontsize=10)
 
             # after all the internal profiles, also plot the RF pressure profile 
-            
-            ax = axes[-2]
-            ax.plot(rho_array, self.p_kPa_RF, linewidth=2, color='darkred')
-            
-            # Formatting to make it readable
-            ax.set_title('RF pressure', fontsize=11, fontweight='bold')
-            ax.set_ylabel('RF Pressure (kPa)', fontsize=9)
-            ax.grid(True, linestyle='--', alpha=0.7)
-            
-            ax.set_xlabel("Normalized Rho", fontsize=10)
+            if from_saved_file == False:
+                ax = axes[-2]
+                ax.plot(rho_array, self.p_kPa_RF, linewidth=2, color='darkred')
+                
+                # Formatting to make it readable
+                ax.set_title('RF pressure', fontsize=11, fontweight='bold')
+                ax.set_ylabel('RF Pressure (kPa)', fontsize=9)
+                ax.grid(True, linestyle='--', alpha=0.7)
+                
+                ax.set_xlabel("Normalized Rho", fontsize=10)
             # Automatically adjust spacing so titles and labels don't overlap
             plt.tight_layout()
             plt.show()
@@ -1167,11 +1481,20 @@ class Far3D_Analysis:
         B0 = self.eqdsk['bcentr']
         rL = mass_kg * velocity / (B0 * self.species_dict[self.species]['charge']) 
         return  rL / minor_radius
+    
+    def calculate_betas(self):
+        p_NBI_core = self.p_kPa_NBI[0] * 1000
+        p_RF_core = self.p_kPa_RF[0] * 1000
+        mu_0 = 4 * np.pi * 1e-7 # Vacuum permeability
+        magnetic_pressure_core = self.eqdsk['bcentr']**2 / (2*mu_0)
+
+        return p_NBI_core/magnetic_pressure_core, p_RF_core/magnetic_pressure_core
+        
 
 
     def write_far3d_parameters(self, filename="far3d_params.txt", 
                                eq_name="woutb",
-                               ext_prof_name="SPARC_with_alpha.txt",
+                               ext_prof_name="external_profiles.txt",
                                ext_prof_len=100,
                                m_dynamic=[12, 11, 10, 9, 8],
                                n_dynamic=[10, -10],
@@ -1199,7 +1522,12 @@ class Far3D_Analysis:
         # calculate larmor radii
         iflr = self.calculate_normalized_larmor_radius(temperature_header_name='temp_ion_e')
         r_epflr = self.calculate_normalized_larmor_radius(temperature_header_name='temp_beam_e')
-        r_epflralp = self..calculate_normalized_larmor_radius(temperature_header_name='temp_alpha_e')
+        r_epflralp = self.calculate_normalized_larmor_radius(temperature_header_name='temp_alpha_e')
+
+        # calculate the core betas
+        betaNBI, betaRF = self.calculate_betas()
+        print(f'Calculated beam beta: {betaNBI}')
+        print(f'Calculated RF beta: {betaRF}')
         
         for n in n_dynamic:
             # Physics check: if n is negative, m must be negative to preserve helicity (q = m/n)
@@ -1219,9 +1547,12 @@ class Far3D_Analysis:
         
         # Calculate total dimension for ldim
         ldim = (len(m_dynamic) * len(n_dynamic)) + leqdim
+
+        # calc the number of profiles per output file 
+        lplots = len(m_dynamic) * len(n_dynamic)
         
         # --- TEMPLATE INJECTION ---
-        template = f"""============================/ MAIM NPUT VARIABLES \===================================
+        template = f"""============================/ MAIN INPUT VARIABLES \===================================
 !!!!!!!!!!! namelist_on: if 1 new run, namelist is used
 0
 !!!!!!!!!!! nstres: if 0 new run, if 1 the run is a continuation
@@ -1312,21 +1643,21 @@ class Far3D_Analysis:
 990
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PLASMA PARAMETERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !!!!!!!!!!! gamma: adiabatic index
-0.0
+1.37
 !!!!!!!!!!! s: magnetic Lundquist number
 5.e6
 !!!!!!!!!!! betath_factor: thermal beta factor. Originally 1.
 1
 !!!!!!!!!!! ietaeq: resistivity profile type (if 5 the electron temperature is used)
-1
+5
 !!!!!!!!!!! spe1: species first EP population
 2
 !!!!!!!!!!! bet0_f: fast particle beta
-0.0
+{betaNBI:.3f}
 !!!!!!!!!!! spe2: species second EP population
 2
 !!!!!!!!!!! bet0_falp: 2nd species fast particle beta. 
-0.10
+{betaRF:.3f}
 !!!!!!!!!!! omcy: normalized fast particle cyclotron frequency
 {omcy}
 !!!!!!!!!!! omcyb: normalized helicaly trapped fast particle frequency. 
@@ -1382,7 +1713,7 @@ class Far3D_Analysis:
 {r_epflralp}
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! OUTPUT !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !!!!!!!!!!! lplots: number of eigenfunction modes in the output files
-10
+{lplots}
 !!!!!!!!!!! nprint: number of step for an output in farprt file
 100
 !!!!!!!!!!! ndump: number of step for an output 
