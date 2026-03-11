@@ -1203,14 +1203,14 @@ class Far3D_Analysis:
             TRFs[ir] = fit[5]
 
         # build interpolators for use later when loading up the profiles 
-        self.nbulks_interp = interp1d(rho_array, nbulks, kind='linear')
-        self.Tbulks_interp = interp1d(rho_array, Tbulks, kind='linear')
+        self.nbulks_interp = interp1d(rho_array, nbulks, kind='linear', bounds_error=False, fill_value=(nbulks[0], nbulks[-1]))
+        self.Tbulks_interp = interp1d(rho_array, Tbulks, kind='linear', bounds_error=False, fill_value=(Tbulks[0], Tbulks[-1]))
 
-        self.nNBIs_interp = interp1d(rho_array, nNBIs, kind='linear')
-        self.TNBIs_interp = interp1d(rho_array, TNBIs, kind='linear')
+        self.nNBIs_interp = interp1d(rho_array, nNBIs, kind='linear', bounds_error=False, fill_value=(nNBIs[0], nNBIs[-1]))
+        self.TNBIs_interp = interp1d(rho_array, TNBIs, kind='linear', bounds_error=False, fill_value=(TNBIs[0], TNBIs[-1]))
 
-        self.nRFs_interp = interp1d(rho_array, nRFs, kind='linear')
-        self.TRFs_interp = interp1d(rho_array, TRFs, kind='linear')
+        self.nRFs_interp = interp1d(rho_array, nRFs, kind='linear', bounds_error=False, fill_value=(nRFs[0], nRFs[-1]))
+        self.TRFs_interp = interp1d(rho_array, TRFs, kind='linear', bounds_error=False, fill_value=(TRFs[0], TRFs[-1]))
 
         if return_arrays:
             return nbulks, Tbulks, nNBIs, TNBIs, nRFs, TRFs
@@ -1498,7 +1498,8 @@ class Far3D_Analysis:
                                ext_prof_len=100,
                                m_dynamic=[12, 11, 10, 9, 8],
                                n_dynamic=[10, -10],
-                               leqdim=23):
+                               leqdim=23,
+                               include_alphas=True):
         """
         Generates the main FAR3d parameters input file.
         Automatically formats Python lists for m and n modes into the 
@@ -1550,6 +1551,12 @@ class Far3D_Analysis:
 
         # calc the number of profiles per output file 
         lplots = len(m_dynamic) * len(n_dynamic)
+
+        # include alhpas 
+        if include_alphas:
+            alphas_RF_included = 1
+        else:
+            alphas_RF_included = 0
         
         # --- TEMPLATE INJECTION ---
         template = f"""============================/ MAIN INPUT VARIABLES \===================================
@@ -1594,7 +1601,7 @@ class Far3D_Analysis:
 !!!!!!!!!!! twofl_on: activate two fluid effects if 1
 0
 !!!!!!!!!!! alpha_on: activate a 2nd fast particle species if 1
-1
+{alphas_RF_included}
 !!!!!!!!!!! Trapped_on: activate correction for trapped 1st fast particle species if 1
 1
 !!!!!!!!!!! matrix_out: activate eigensolver output
