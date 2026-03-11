@@ -363,7 +363,10 @@ class Far3D_Analysis:
                                psi_levels=6, 
                                fontsize=14, 
                                psi_norm_max=0.95, 
-                               phase=0):
+                               phase=0,
+                               use_range = False,
+                               vmin=-1,
+                               vmax=1):
         
         if use_eqdsk_grids:
             Rarray = self.eqdsk_with_B_info["rgrid"]
@@ -378,8 +381,11 @@ class Far3D_Analysis:
                                                        far3d_output_name=far3d_output_name, 
                                                        psi_norm_max=psi_norm_max, 
                                                        phase=phase)
-        
-        c1 = ax.contourf(Rarray, Zarray, mode_2d_structure.T, levels=300, cmap='seismic')
+        if use_range:
+            c1 = ax.contourf(Rarray, Zarray, mode_2d_structure.T, levels=300, cmap='seismic', vmin=vmin, vmax=vmax)
+        else:
+            abs_max = np.max(np.abs(mode_2d_structure))
+            c1 = ax.contourf(Rarray, Zarray, mode_2d_structure.T, levels=300, cmap='seismic', vmin=-abs_max, vmax=abs_max)
         fig.colorbar(
             c1, ax=ax, label=f"{far3d_output_name} magnitude"
         )
