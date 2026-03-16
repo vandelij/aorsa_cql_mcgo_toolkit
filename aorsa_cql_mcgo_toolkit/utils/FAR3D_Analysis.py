@@ -12,7 +12,7 @@ from matplotlib import cm
 from matplotlib import ticker, cm
 from scipy.interpolate import interp1d, RectBivariateSpline, PchipInterpolator, RegularGridInterpolator
 from scipy.integrate import cumulative_trapezoid
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, root, least_squares
 import os, sys
 import netCDF4
 import f90nml as f90
@@ -528,6 +528,16 @@ class Far3D_Analysis:
     
     def maxwell_speed_distribution(self, s, n, T, species):
         return self.maxwell(v=s,n=n,T=T, species=species) * 4 * np.pi * s**2
+    
+    def dmaxwell_speed_distribution(self, s, n, T, species):
+        T = T * 1000 * 1.6022e-19 # convert to J
+        mass = self.species_dict[species]['mass']
+
+        alpha = 4*np.pi*(mass/(2*np.pi))**(3/2)
+        beta = mass/2
+
+        return n*alpha*(1/T)**(3/2) * np.exp(-beta*s**2/T) * 2 * s * (1 - s**2*beta/T)
+
     
     def slowing_down_far3d(self, v, n, Te, species):
         me = 9.109e-31
@@ -1117,6 +1127,199 @@ class Far3D_Analysis:
         nRF = self.integrate_speed_distribution(v=RF_speeds, F=F_rf_nbi_rf_speeds)
         TRF = self.calculate_effective_temperature(varray=RF_speeds, farray=F_rf_nbi_rf_speeds, species=self.species, F_type='speed')
         return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+    
+    def system_of_equations(self, vars):
+        n2, T2, n3, T3 = vars # unpack the variables. n2, n3 are per m^3 / 1e18
+
+        # rescale to per m^3
+        n2 = n2 * 1e18
+        n3 = n3 * 1e18
+        # grab these from saved state  
+        n1 = self.N1
+        T1 = self.T1
+        F = self.F_of_v_interpolator
+        dFdv = self.dF_dv_interpolator
+        v_a = self.v_a
+        v_b = self.v_b
+
+        # list out the three equations
+        eq1 = self.maxwell_speed_distribution(s=v_a, n=n1, T=T1, species=self.species) + \
+              self.maxwell_speed_distribution(s=v_a, n=n2, T=T2, species=self.species) + \
+              self.maxwell_speed_distribution(s=v_a, n=n3, T=T3, species=self.species) - \
+              F(v_a)
+        
+        eq2 = self.maxwell_speed_distribution(s=v_b, n=n1, T=T1, species=self.species) + \
+              self.maxwell_speed_distribution(s=v_b, n=n2, T=T2, species=self.species) + \
+              self.maxwell_speed_distribution(s=v_b, n=n3, T=T3, species=self.species) - \
+              F(v_b)
+        
+        eq3 = self.dmaxwell_speed_distribution(s=v_a, n=n1, T=T1, species=self.species) + \
+              self.dmaxwell_speed_distribution(s=v_a, n=n2, T=T2, species=self.species) + \
+              self.dmaxwell_speed_distribution(s=v_a, n=n3, T=T3, species=self.species) - \
+              dFdv(v_a)
+        
+        eq4 = self.dmaxwell_speed_distribution(s=v_b, n=n1, T=T1, species=self.species) + \
+              self.dmaxwell_speed_distribution(s=v_b, n=n2, T=T2, species=self.species) + \
+              self.dmaxwell_speed_distribution(s=v_b, n=n3, T=T3, species=self.species) - \
+              dFdv(v_b)
+        
+        return [eq1, eq2, eq3, eq4]
+    
+
+    def fit_3_maxwellians_to_speed_distribution_critical_speed_and_slope(self, v, F, E_NBI_kev, rho, mode='cql3d', mcgo_energy_filter_kev=30):
+        """_summary_
+
+        Parameters
+        ----------
+        v : _type_
+            _description_
+        F : _type_
+            _description_
+        E_NBI_kev : _type_
+            _description_
+        rho : _type_
+            _description_
+        mode : str, optional
+            Can be set to 'cql3d' or 'mcgo', by default 'cql3d'. changes how the distribution function is processed since mcgo thermal bulk needs to be removed. 
+        mcgo_energy_filter_kev : float
+            Only used in mode = 'mcgo'. Should match the mcgo/p2f energy filter used. For truncating the NBI distribution to not count ash.  
+
+        Returns
+        -------
+        _type_
+            _description_
+
+        Raises
+        ------
+        ValueError
+            _description_
+        """
+
+        F_interp = interp1d(v, F, kind='linear')
+        self.F_of_v_interpolator = F_interp
+
+        dF_dv = np.gradient(F, v)
+        dFdv_interpolator = interp1d(v, dF_dv, kind='linear')
+        self.dF_dv_interpolator = dFdv_interpolator
+
+
+        E_NBI = E_NBI_kev * 1000 * 1.6022e-19
+        v_NBI = np.sqrt(2*E_NBI / self.species_dict[self.species]['mass'])
+
+        if v[-1] < v_NBI:
+            raise ValueError(f'The velocity grid supplied does not extend to beam input energy {E_NBI_kev} keV')
+        
+        n_tot = self.integrate_speed_distribution(v=v, F=F)
+        n_bulk_guess = n_tot*0.99 # small factor to make sure the optimization is happy
+        nbulk_from_profile = self.ni_interpolator_m3(rho)
+
+        Tbulk_kev = self.Ti_interpolator_kev(rho)
+        Te_bulk_kev = self.Te_interpolator_kev(rho) 
+
+
+        if mode == 'cql3d': 
+            v_thermal = np.sqrt(Tbulk_kev*1000*1.6022e-19*2/self.species_dict[self.species]['mass'])
+
+            thermal_speeds = np.linspace(20000, v_NBI/np.sqrt(3), len(v))
+
+
+            F_thermal_range = F_interp(thermal_speeds)
+
+            # fit just the maxwellian
+            initial_guess = [n_bulk_guess, Tbulk_kev]
+            lower_bounds = [n_bulk_guess/2, Tbulk_kev/2]
+            upper_bounds = [n_tot, Tbulk_kev*2]        
+
+            # now, actually perform the optimization 1: fitting the thermal bulk 
+            popt, pcov = curve_fit(
+                self.single_maxwellain_to_fit, 
+                thermal_speeds, 
+                F_thermal_range, 
+                p0=initial_guess, 
+                bounds=(lower_bounds, upper_bounds)
+            )   
+            # unpack result 
+            nbulk = popt[0]
+            Tbulk = popt[1]
+
+        elif mode == 'mcgo':
+            # for now, just assume the maxwellian due to the bulk is uneffected by NBI/RF. 
+            nbulk = nbulk_from_profile.item()
+            Tbulk = Tbulk_kev.item()
+        else:
+            raise ValueError(f"Mode {mode} not understood. Allowed modes are 'cql3d' and 'mcgo'.")
+        
+        # make the F interpolator 
+            # done. 
+        # make the dF/dv interpolator 
+            # done.
+        # load up bulk n, T
+        self.N1 = nbulk
+        self.T1 = Tbulk
+        mu0 = 4*np.pi * 1e-7
+        rho_m = nbulk * self.species_dict[self.species]['mass'] 
+        vA = self.eqdsk['bcentr'] / np.sqrt(mu0*rho_m)
+        self.v_a = vA/2
+        self.v_b = vA
+        # make initial guess for n2, T2, n3, T3
+        initial_guess = [nbulk/10/1e18, Tbulk*5, nbulk/100/1e18, Tbulk*20]
+        lower_bounds = [0, Tbulk*2, 0, Tbulk*2]
+        upper_bounds = [nbulk, np.inf, nbulk, np.inf]
+
+        # solve system of equations
+        #result = root(self.system_of_equations, initial_guess)
+        result = least_squares(
+            self.system_of_equations, 
+            initial_guess, 
+            bounds=(lower_bounds, upper_bounds)
+        )
+        
+        # unload result
+        nNBI = result.x[0]*1e18
+        TNBI = result.x[1]
+        nRF = result.x[2]*1e18
+        TRF = result.x[3]
+        # return 
+
+        # nbulk = self.integrate_speed_distribution(v=thermal_speeds, F=F_thermal_range)
+        # Tbulk = self.calculate_effective_temperature(varray=thermal_speeds, farray=F_thermal_range, species=self.species, F_type='speed')
+
+        # # subtract off the bulk 
+        # F_rf_nbi = F - self.maxwell_speed_distribution(s=v, n=nbulk, T=Tbulk, species=self.species)
+        # # make sure negative values are ignored. 
+        # F_rf_nbi[F_rf_nbi < 0] = 0.0
+        # F_rf_nbi_interp = interp1d(v, F_rf_nbi, kind='linear')
+
+        # # calculate the speed at 5 eV to truncate noise near v = 0 inb the cql3d distribution. 
+        # E_5eV = 5*1.6022e-19
+        # mass = self.species_dict[self.species]['mass']
+        # v_5eV = np.sqrt(E_5eV * 2 / mass)
+
+        # E_cuttof_mcgo = mcgo_energy_filter_kev * 1000 *1.6022e-19
+        # v_mcgo_cuttoff = np.sqrt(E_cuttof_mcgo * 2 / mass)
+
+        # # NBI_speeds = np.linspace(v_5eV, v_NBI*1.2, len(v))
+        # # RF_speeds = np.linspace(v_NBI*1.2, v[-1], len(v))
+
+        # if mode == 'cql3d':
+        #     NBI_speeds = np.linspace(v_5eV, v_NBI, len(v))
+        # elif mode == 'mcgo':
+        #     NBI_speeds = np.linspace(v_mcgo_cuttoff, v_NBI, len(v))
+                                     
+        # RF_speeds = np.linspace(v_NBI, v[-1], len(v))
+        # F_rf_nbi_nbi_speeds = F_rf_nbi_interp(NBI_speeds)
+        # F_rf_nbi_rf_speeds = F_rf_nbi_interp(RF_speeds)
+
+        # # nbi 
+        # nNBI = self.integrate_speed_distribution(v=NBI_speeds, F=F_rf_nbi_nbi_speeds)
+        # TNBI = self.calculate_effective_temperature(varray=NBI_speeds, farray=F_rf_nbi_nbi_speeds, species=self.species, F_type='speed')
+
+        # # RF 
+        # nRF = self.integrate_speed_distribution(v=RF_speeds, F=F_rf_nbi_rf_speeds)
+        # TRF = self.calculate_effective_temperature(varray=RF_speeds, farray=F_rf_nbi_rf_speeds, species=self.species, F_type='speed')
+        return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+        
+        
 
 
 
