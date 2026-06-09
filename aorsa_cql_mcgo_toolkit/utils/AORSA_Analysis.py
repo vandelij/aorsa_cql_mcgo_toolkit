@@ -82,8 +82,8 @@ class Aorsa_Analysis():
 
         # load up pol and toroidal grids TODO: couldnt get OMFIT to work
         # when it is, these should come directly from self.eqdsk 
-        rhopol = np.loadtxt(self.local_work_dir+self.rho_pol)
-        rhotor = np.loadtxt(self.local_work_dir+self.rho_tor)
+        rhopol = np.loadtxt(self.rho_pol)
+        rhotor = np.loadtxt(self.rho_tor)
 
         if type == 'den':
             S_NRHO_N = self.aorsa_nml['STATE']['S_NRHO_N']
@@ -105,7 +105,7 @@ class Aorsa_Analysis():
             
     
     def load_template(self):
-        self.aorsa_nml = f90.read(self.local_work_dir + self.aorsa2din_template)
+        self.aorsa_nml = f90.read(self.aorsa2din_template)
 
     def plot_density(self):
         S_NRHO_N = self.aorsa_nml['STATE']['S_NRHO_N']

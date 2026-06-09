@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.cbook as cbook
 from matplotlib import cm
-from matplotlib import ticker, cm
+from matplotlib import ticker
 from scipy.interpolate import interp1d, RectBivariateSpline, PchipInterpolator, RegularGridInterpolator
 from scipy.optimize import curve_fit
 from scipy.integrate import trapezoid
@@ -42,20 +42,40 @@ class MCGO_Post_Process:
 
         # read .nc file
         if mcgo_nc_file is not None:
-            self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
+            self.read_mcgo_nc(mcgo_nc_file)
 
-            # parse the file 
-            self.parse_mcgo_nc()
+            # if isinstance(mcgo_nc_file, list):
+            #     self.nc_object_list = []
+            #     for item in mcgo_nc_file:
+            #         self.nc_object_list.append(netCDF4.Dataset(item, "r"))
+
+            #     self.parse_mcgo_nc(multi_file_mode=True)
+            # else:
+            #     self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
+
+            #     # parse the file 
+            #     self.parse_mcgo_nc()
 
         # assign mass from supported mcgo species
         self.species_dict = {}
         self.species_dict['d'] = {'mass':3.343583e-27, 'charge':1.6022e-19}
 
     def read_mcgo_nc(self, mcgo_nc_file):
-        self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
+        if isinstance(mcgo_nc_file, list):
+            self.nc_object_list = []
+            for item in mcgo_nc_file:
+                self.nc_object_list.append(netCDF4.Dataset(item, "r"))
 
-        # parse the file
-        self.parse_mcgo_nc()
+            self.parse_mcgo_nc(multi_file_mode=True)
+        else:
+            self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
+
+            # parse the file 
+            self.parse_mcgo_nc()
+        # self.mcgo_nc = netCDF4.Dataset(mcgo_nc_file, "r")
+
+        # # parse the file
+        # self.parse_mcgo_nc()
 
     def process_eqdsk(self):
         # unpack the equilibrium magnetics
@@ -95,7 +115,7 @@ class MCGO_Post_Process:
             self.rho_grid, self.getBStrength(self.R_f_grid, self.eqdsk['zmaxis'], grid=False)
         )
 
-    def plot_equilibrium(self, figsize, levels=10, fontsize=20, return_plot=False):
+    def plot_equilibrium(self, figsize, levels=10, fontsize=20, return_plot=False, limiter_color='red'):
         fig, ax = plt.subplots(figsize=figsize)
         # psizr = self.eqdsk["psizr"]
         # psi_mag_axis = self.eqdsk["simag"]
@@ -114,7 +134,7 @@ class MCGO_Post_Process:
             levels=levels,
             colors="black",
         )
-        ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color="red", linewidth=3)
+        ax.plot(self.eqdsk["rlim"], self.eqdsk["zlim"], color=limiter_color, linewidth=3)
         ax.plot(self.eqdsk["rbbbs"], self.eqdsk["zbbbs"], color="black", linewidth=3)
         font = FontProperties(size=fontsize)
         formatter = FuncFormatter(lambda x, _: f'{x:.1f}')
@@ -132,34 +152,86 @@ class MCGO_Post_Process:
 
         plt.show()
     
-    def parse_mcgo_nc(self):
-        self.rho_grid = self.mcgo_nc.variables['rho_sqpolflx'][:] #Norm-ed rho~sqrt(pol.flux) at radbnd
-        self.R_f_grid = self.mcgo_nc.variables['radbnd'][:] # R bins corrisponding to self.rho_grid. 
-        self.vdstb = self.mcgo_nc.variables['vdstb'][:] #Midplane distr.func aver over [tim_fdist_1;tim_fdist_2]
-        self.vbnd = self.mcgo_nc.variables['vbnd'][:]   #Vel. grid [m/s] for distr. func.
-        self.vmax = np.max(self.vbnd)
-        self.ptchbnd = self.mcgo_nc.variables['ptchbnd'][:] #Pitch angle grid [rad] for distr. func.
-        cosy = np.asmatrix(np.cos(self.ptchbnd)) #make a matrix (1,iptchbnd) {not same as vector}
-        siny =np.asmatrix(np.sin(self.ptchbnd)) #make a matrix (1,iptchbnd) {not same as vector}
-        xx =np.asmatrix(self.vbnd).T # make a matrix (1,ivbnd)   [m/s]
-        self.X = np.dot(xx, cosy)   # (ivbnd, iptchbnd) matrix
-        self.Y = np.dot(xx, siny)    # (ivbnd, iptchbnd) matrix
+    def parse_mcgo_nc(self, multi_file_mode=False):
+        if multi_file_mode == False:
+            self.rho_grid = self.mcgo_nc.variables['rho_sqpolflx'][:] #Norm-ed rho~sqrt(pol.flux) at radbnd
+            self.R_f_grid = self.mcgo_nc.variables['radbnd'][:] # R bins corrisponding to self.rho_grid. 
+            self.vdstb = self.mcgo_nc.variables['vdstb'][:] #Midplane distr.func aver over [tim_fdist_1;tim_fdist_2]
+            self.vbnd = self.mcgo_nc.variables['vbnd'][:]   #Vel. grid [m/s] for distr. func.
+            self.vmax = np.max(self.vbnd)
+            self.ptchbnd = self.mcgo_nc.variables['ptchbnd'][:] #Pitch angle grid [rad] for distr. func.
+            cosy = np.asmatrix(np.cos(self.ptchbnd)) #make a matrix (1,iptchbnd) {not same as vector}
+            siny =np.asmatrix(np.sin(self.ptchbnd)) #make a matrix (1,iptchbnd) {not same as vector}
+            xx =np.asmatrix(self.vbnd).T # make a matrix (1,ivbnd)   [m/s]
+            self.X = np.dot(xx, cosy)   # (ivbnd, iptchbnd) matrix
+            self.Y = np.dot(xx, siny)    # (ivbnd, iptchbnd) matrix
+            
 
-        if self.particle_lists_on:
-            self.rend= self.mcgo_nc.variables['rend'][:] #[m] R-coord at t=tend
-            self.zend= self.mcgo_nc.variables['zend'][:] #[m] Z-coord at t=tend
-            self.vparend= self.mcgo_nc.variables['vparend'][:] #[m/s] Vpar at t=tend
-            self.vperend= self.mcgo_nc.variables['vperend'][:] #[m/s] Vper at t=tend
-            self.ivparini= self.mcgo_nc.variables['ivparini'][:] #sign of Vpar at t=0
-            try:
-                self.weight_factors = self.mcgo_nc.variables['anormal']
-            except:
-                print("nc file missing field 'anormal'")
-            try:
-                self.ipcount = self.mcgo_nc.variables['ipcount']
-                self.kep1 = self.mcgo_nc.variables['kep1']
-            except:
-                print("nc file missing field 'anormal'")
+            if self.particle_lists_on:
+                self.rend= self.mcgo_nc.variables['rend'][:] #[m] R-coord at t=tend
+                self.zend= self.mcgo_nc.variables['zend'][:] #[m] Z-coord at t=tend
+                self.vparend= self.mcgo_nc.variables['vparend'][:] #[m/s] Vpar at t=tend
+                self.vperend= self.mcgo_nc.variables['vperend'][:] #[m/s] Vper at t=tend
+                self.ivparini= self.mcgo_nc.variables['ivparini'][:] #sign of Vpar at t=0
+                try:
+                    self.weight_factors = self.mcgo_nc.variables['anormal'][:]
+                except:
+                    print("nc file missing field 'anormal'")
+                try:
+                    self.ipcount = self.mcgo_nc.variables['ipcount']
+                    self.kep1 = self.mcgo_nc.variables['kep1']
+                except:
+                    print("nc file missing field 'anormal'")
+
+        else: 
+            # assume that the two files have the same grids etc 
+            mcgo_nc1 = self.nc_object_list[0]
+            self.rho_grid = mcgo_nc1.variables['rho_sqpolflx'][:] #Norm-ed rho~sqrt(pol.flux) at radbnd
+            self.R_f_grid = mcgo_nc1.variables['radbnd'][:] # R bins corrisponding to self.rho_grid. 
+            # self.vdstb = self.mcgo_nc.variables['vdstb'][:] #Midplane distr.func aver over [tim_fdist_1;tim_fdist_2]
+            self.vbnd = mcgo_nc1.variables['vbnd'][:]   #Vel. grid [m/s] for distr. func.
+            self.vmax = np.max(self.vbnd)
+            self.ptchbnd = mcgo_nc1.variables['ptchbnd'][:] #Pitch angle grid [rad] for distr. func.
+            cosy = np.asmatrix(np.cos(self.ptchbnd)) #make a matrix (1,iptchbnd) {not same as vector}
+            siny =np.asmatrix(np.sin(self.ptchbnd)) #make a matrix (1,iptchbnd) {not same as vector}
+            xx =np.asmatrix(self.vbnd).T # make a matrix (1,ivbnd)   [m/s]
+            self.X = np.dot(xx, cosy)   # (ivbnd, iptchbnd) matrix
+            self.Y = np.dot(xx, siny)    # (ivbnd, iptchbnd) matrix
+
+            f_total = np.zeros_like(mcgo_nc1.variables['vdstb'][:])
+            self.rend= []
+            self.zend= []
+            self.vparend= []
+            self.vperend= []
+            self.ivparini= []
+            self.weight_factors = []
+
+            for mcgo_nc in self.nc_object_list:
+                f_total += mcgo_nc.variables['vdstb'][:]
+                if self.particle_lists_on:
+                    self.rend.append(mcgo_nc.variables['rend'][:]) #[m] R-coord at t=tend
+                    self.zend.append(mcgo_nc.variables['zend'][:]) #[m] Z-coord at t=tend
+                    self.vparend.append(mcgo_nc.variables['vparend'][:]) #[m/s] Vpar at t=tend
+                    self.vperend.append(mcgo_nc.variables['vperend'][:]) #[m/s] Vper at t=tend
+                    self.ivparini.append(mcgo_nc.variables['ivparini'][:]) #sign of Vpar at t=0
+                    try:
+                        self.weight_factors.append(mcgo_nc.variables['anormal'][:])
+                    except:
+                        print("nc file missing field 'anormal'")
+                    # try:
+                    #     self.ipcount = self.mcgo_nc.variables['ipcount']
+                    #     self.kep1 = self.mcgo_nc.variables['kep1']
+                    # except:
+                    #     print("nc file missing field 'anormal'")
+            self.vdstb = f_total
+            if self.particle_lists_on:
+                self.rend = np.concatenate(self.rend)
+                self.zend = np.concatenate(self.zend)
+                self.vparend = np.concatenate(self.vparend)
+                self.vperend = np.concatenate(self.vperend)
+                self.ivparini = np.concatenate(self.ivparini)
+                if self.weight_factors:
+                    self.weight_factors = np.concatenate(self.weight_factors)
 
     def get_rho_index(self, rho):
         """helper function to return the nearnest rho grid index for a particular rho
@@ -426,13 +498,13 @@ class MCGO_Post_Process:
 
         # plot the equilibrium
         fig, ax = self.plot_equilibrium(
-            figsize=figsize, levels=levels, fontsize=fontsize, return_plot=True
+            figsize=figsize, levels=levels, fontsize=fontsize, return_plot=True, limiter_color="black"
         )
 
         kp=np.where(self.ivparini>0) # RED:  Vpar>0 at t=0
         kn=np.where(self.ivparini<0) # BLUE: Vpar<0 at t=0
         plt.plot(self.rend[kp],self.zend[kp],'r.',markersize=dotsize)  #Large arrays; consider stride
-        plt.plot(self.rend[kn],self.zend[kn],'b.',markersize=dotsize)  #Large arrays; consider stride 
+        plt.scatter(self.rend[kn],self.zend[kn],color='cyan',marker='.', s=dotsize, zorder=5)  #Large arrays; consider stride 
         ax.grid()
         if return_plot:
             return fig, ax
@@ -764,10 +836,14 @@ class MCGO_Post_Process:
         """
 
         # Read in MCGO end particle lists
-        r = self.mcgo_nc.variables['rend'][:]     # [m] R-coord at t=tend
-        z = self.mcgo_nc.variables['zend'][:]     # [m] Z-coord at t=tend
-        vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
-        vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        # r = self.mcgo_nc.variables['rend'][:]     # [m] R-coord at t=tend
+        # z = self.mcgo_nc.variables['zend'][:]     # [m] Z-coord at t=tend
+        # vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
+        # vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        r = self.rend     # [m] R-coord at t=tend
+        z = self.zend     # [m] Z-coord at t=tend
+        vpar = self.vparend   # [m/s] Vpar at t=tend
+        vperp = self.vperend  # [m/s] Vperp at t=tend
         #weight = np.ones_like(r)*weight  # TODO: adjust weights appropriately
 
         assert all(len(arr) == len(r) for arr in [z, vperp, vpar, weight]), \
@@ -803,10 +879,14 @@ class MCGO_Post_Process:
 
     def bin_particles_RZ(self, NR, NZ):
         # Read in MCGO end particle lists
-        r = self.mcgo_nc.variables['rend'][:]     # [m] R-coord at t=tend
-        z = self.mcgo_nc.variables['zend'][:]     # [m] Z-coord at t=tend
-        vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
-        vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        r = self.rend     # [m] R-coord at t=tend
+        z = self.zend     # [m] Z-coord at t=tend
+        vpar = self.vparend   # [m/s] Vpar at t=tend
+        vperp = self.vperend  # [m/s] Vperp at t=tend
+        # r = self.mcgo_nc.variables['rend'][:]     # [m] R-coord at t=tend
+        # z = self.mcgo_nc.variables['zend'][:]     # [m] Z-coord at t=tend
+        # vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
+        # vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
         Rmin = np.min(r)
         Rmax = np.max(r)
         Zmin = np.min(z)
@@ -817,8 +897,10 @@ class MCGO_Post_Process:
         self.Z_bin = np.digitize(z, Z_edges) - 1
 
     def plot_bin_particles_RZ(self, NR, NZ, i, j, figsize=(5,5), fontsize=12):
-        vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
-        vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        # vpar = self.mcgo_nc.variables['vparend'][:]   # [m/s] Vpar at t=tend
+        # vperp = self.mcgo_nc.variables['vperend'][:]  # [m/s] Vperp at t=tend
+        vpar = self.vparend   # [m/s] Vpar at t=tend
+        vperp = self.vperend  # [m/s] Vperp at t=tend
         self.bin_particles_RZ(NR, NZ)
         mask = (self.R_bin == i) & (self.Z_bin == j)
         vperp_local = vperp[mask]
