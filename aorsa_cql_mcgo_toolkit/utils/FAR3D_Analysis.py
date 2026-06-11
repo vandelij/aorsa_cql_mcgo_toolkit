@@ -24,6 +24,7 @@ import re
 import plasma
 from plasma import equilibrium_process
 import textwrap
+import h5py
 
 # import Grant's eqdsk processor for getting B info
 from process_eqdsk2 import getGfileDict
@@ -44,6 +45,7 @@ class Far3D_Analysis:
         # assign mass from supported mcgo species
         self.species_dict = {}
         self.species_dict['d'] = {'mass':3.343583e-27, 'charge':1.6022e-19}
+        self.species_dict['dt-mix'] = {'mass':3.343583e-27*2.5/2, 'charge':1.6022e-19}
 
         self.data_dict = {} # will hold all of the far3d output data
         self.case_txt_dict = {} # will hold the profiles for the case to aid in setup 
@@ -171,58 +173,55 @@ class Far3D_Analysis:
     def load_mode_file(self, filename, name):
         """
         Parses a mode file with headers like 'n/m'.
-        
-        Returns:
-            r (np.array): The radial grid (1D array)
-            data (np.array): The mode data (2D array: rows=r, cols=modes)
-            ns (list): List of toroidal mode numbers n
-            ms (list): List of poloidal mode numbers m
+        Combines Real (R) and Imaginary (I) columns into a complex array.
         """
-        
+        import re
+        import numpy as np
+        from scipy.interpolate import interp1d
+
         # 1. Parse the header line
         with open(filename, 'r') as f:
             header_line = f.readline()
 
-        # Regex to find patterns like "12/ 10" or "-5/-2" 
-        # capturing the integer before and after the slash.
-        # Pattern explanation:
-        #  (-?\d+)  : Capture Group 1 (Integer, optional negative sign)
-        #  \s*/\s* : A slash, optionally surrounded by whitespace
-        #  (-?\d+)  : Capture Group 2 (Integer, optional negative sign)
+        # Regex finds all m/n patterns (both R and I halves)
         matches = re.findall(r'(-?\d+)\s*/\s*(-?\d+)', header_line)
 
-        # Convert strings to integers
-        ms = [int(x[0]) for x in matches]
-        ns = [int(x[1]) for x in matches]
+        # Since it prints all Reals, then all Imaginaries, the true number of modes is half the matches
+        num_modes = len(matches) // 2
+
+        # Only grab the first half for our labels
+        ms = [int(x[0]) for x in matches[:num_modes]]
+        ns = [int(x[1]) for x in matches[:num_modes]]
 
         # 2. Load the numerical data
-        # skiprows=1 ignores the header we just parsed
         raw_data = np.loadtxt(filename, skiprows=1)
-
-        # Split into radius (col 0) and mode values (cols 1 to end)
         r = raw_data[:, 0]
-        data = raw_data[:, 1:]
 
-        # Sanity check
-        if data.shape[1] != len(ns):
-            print(f"Warning: Found {len(ns)} headers but {data.shape[1]} data columns.")
+        # 3. Reconstruct the Complex Array
+        # Reals are in columns 1 through num_modes
+        # Imaginaries are in columns num_modes+1 to the end
+        real_part = raw_data[:, 1 : 1 + num_modes]
+        imag_part = raw_data[:, 1 + num_modes : 1 + 2 * num_modes]
+        
+        # Combine into a single complex array
+        complex_data = real_part + 1j * imag_part
 
-        # produce interpolator over rho
+        # produce interpolator over rho (interp1d handles complex numbers natively!)
         interpolators = []
-        for i in range(len(ns)):
-            interpolator = interp1d(r, data[:,i], kind='cubic')
+        for i in range(num_modes):
+            interpolator = interp1d(r, complex_data[:, i], kind='cubic')
             interpolators.append(interpolator)
 
         # store data 
         file_dict = {}
         file_dict['r'] = r
-        file_dict['data'] = data
+        file_dict['data'] = complex_data  # Now holds complex values!
         file_dict['ns'] = ns
         file_dict['ms'] = ms
         file_dict['interpolators'] = interpolators
         self.data_dict[name] = file_dict
 
-        print(f'File {filename} loaded. Access by key {name} from self.data_dict')
+        print(f'File {filename} loaded. {num_modes} complex modes found.')
 
     def read_all_profile_outputs_and_store(self, directory, run_indicator):
         for name in self.output_types:
@@ -231,7 +230,8 @@ class Far3D_Analysis:
             self.load_mode_file(filename=file_name, name=name)
 
     def find_maximum_growth_rate_and_frequency(self, run_indicator, directory):
-        far3d_output_file = directory + f'/farprt{run_indicator}'
+        # far3d_output_file = directory + f'/farprt{run_indicator}'
+        far3d_output_file = directory + f'/farprt'
         best = {'gam': -1e30, 'om_r': 0.0}
         pattern = re.compile(
             r'^\s*(?:psi|phi|pr)\s*:\s*m=\s*\d+\s+n=\s*\d+\s*gam=\s*([0-9E+\-\.]+)\s*om_r=\s*([0-9E+\-\.]+)'
@@ -261,7 +261,7 @@ class Far3D_Analysis:
         
         # 1. Alfvén velocity
         rho_mass = (n_i0) * (self.species_dict[self.species]['mass']) # Core mass density (kg/m^3)
-        v_A0 = B0 / np.sqrt(mu_0 * rho_mass)            # m/s
+        v_A0 = np.abs(B0) / np.sqrt(mu_0 * rho_mass)            # m/s
         
         # 2. Alfvén frequency
         omega_A0 = v_A0 / R0   # rad/s
@@ -270,7 +270,7 @@ class Far3D_Analysis:
 
 
 
-    def plot_all_output_profiles(self, run_indicator, directory, figsize=(20,20)):
+    def plot_all_output_profiles(self, run_indicator, directory, wave_part='real', rotate=False, figsize=(20,20)):
         num_plots = len(self.output_types) - 1
         if num_plots % 2 == 0:
             num_rows = int(num_plots / 2)
@@ -282,9 +282,10 @@ class Far3D_Analysis:
 
         # first, find the fastest growing mode and convert to kHz 
         omega_A0 = self.calculate_alfven_angular_freq()
+        print(f'Found omega_A0:{omega_A0}')
         gamma, omega_r = self.find_maximum_growth_rate_and_frequency(run_indicator=run_indicator, directory=directory)
         un_normalize = omega_A0  / (2 * np.pi * 1000) # to kHz
-
+        print(f'Conversion to KHz: {un_normalize}')
         gamma_kHz = gamma * un_normalize
         omega_r_kHz = omega_r * un_normalize
 
@@ -295,12 +296,38 @@ class Far3D_Analysis:
             data = data_dict['data']
             ns = data_dict['ns']
             ms = data_dict['ms']
+            
+            # --- NEW GLOBAL ROTATION LOGIC ---
+            if rotate:
+                # 1. Find the 2D index of the absolute largest value across ALL modes
+                # np.argmax on a 2D array flattens it, so we unravel it back to (row, col)
+                max_idx = np.unravel_index(np.argmax(np.abs(data)), data.shape)
+                
+                # 2. Extract the phase of that single dominant point
+                global_peak_phase = np.angle(data[max_idx])
+            # ---------------------------------
+
             for imode in range(len(ns)):
                 n = ns[imode]
                 m = ms[imode]
                 profile = data[:,imode]
+
+                # now, rotate the wave using the SAME angle for every mode
+                if rotate:
+                    profile = profile * np.exp(-1j * global_peak_phase)
+
+                if wave_part == 'real':
+                    profile = np.real(profile)
+                elif wave_part == 'imaginary':
+                    profile = np.imag(profile)
+                elif wave_part == 'mag':
+                    profile = np.abs(profile)
+                else:
+                    raise ValueError('Wave plotting type wave_part not understood')
+                
                 label = f'm/n: {m}/{n}'
                 axes[i].plot(rgrid, profile, label=label)
+            
             axes[i].grid()
             axes[i].set_title(f'Name: {name}')
             axes[i].legend()
@@ -310,9 +337,7 @@ class Far3D_Analysis:
         fig.suptitle(title_string, fontsize=30, fontweight='bold')
 
 
-            
-
-
+        
 
     def get_perturbed_RZ(self, R, Z, far3d_output_name, psi_norm_max=0.95, phase=0):
         psi_norm = self.getpsirzNorm(R,Z).item()
@@ -2014,6 +2039,323 @@ class Far3D_Analysis:
             
         print(f"Successfully generated FAR3d parameters file: {filename}")
         print(f"-> Total Modes (ldim) Calculated: {ldim}")
+
+    def grab_and_store_alfven_continuum(self, run_dir):
+            # assumes you have run far3d in matrix mode and then ran xcontinuum_FAR3d
+        """
+        Parses the FAR3D Input_Model to extract dynamic m and n modes.
+        Reads the far3d_continuum.dat file, groups the frequencies by mode index,
+        and writes the data into an ALCON-style HDF5 dictionary.
+        """
+        # ---------------------------------------------------------
+        # 1. PARSE THE INPUT_MODEL FOR MODES
+        # ---------------------------------------------------------
+        print("Parsing Input_Model for dynamic modes...")
+
+        input_model_path = run_dir + 'Input_Model'
+        continuum_data_path = run_dir + 'far3d_continuum.dat'
+        output_hdf5_path = run_dir + 'combined_data.h5'
+
+        with open(input_model_path, 'r') as f:
+            lines = f.readlines()
+
+        ldim = 0
+        leqdim = 0
+        mm_lines = []
+        nn_lines = []
+        
+        current_section = None
+        for i, line in enumerate(lines):
+            # Extract the array dimensions
+            if line.startswith('!!!!!!!!!!! ldim:'):
+                ldim = int(lines[i+1].strip())
+            elif line.startswith('!!!!!!!!!!! leqdim:'):
+                leqdim = int(lines[i+1].strip())
+                
+            # Extract the arrays
+            elif line.startswith('!!!!!!!!!!! mm:'):
+                current_section = 'mm'
+            elif line.startswith('!!!!!!!!!!! nn:'):
+                current_section = 'nn'
+            elif line.startswith('!!!!!!!!!!!'):
+                if current_section in ['mm', 'nn']:
+                    current_section = None  # Stop collecting at the next parameter flag
+                    
+            # Append lines to our array buffers
+            elif current_section == 'mm':
+                mm_lines.append(line.strip())
+            elif current_section == 'nn':
+                nn_lines.append(line.strip())
+
+        num_dyn_modes = ldim - leqdim
+
+        def parse_fortran_array(arr_lines):
+            """Helper to parse Fortran multi-line, comma-separated, scalar-multiplied arrays (e.g. 4*1)."""
+            vals = []
+            for ln in arr_lines:
+                # Clean up commas and split by spaces
+                parts = ln.replace(',', ' ').split()
+                for p in parts:
+                    if '*' in p:
+                        count, val = p.split('*')
+                        vals.extend([int(val)] * int(count))
+                    else:
+                        vals.append(int(p))
+            return vals
+            
+        # Parse and truncate the lists to ONLY include dynamic modes
+        mm_vals = parse_fortran_array(mm_lines)[:num_dyn_modes]
+        nn_vals = parse_fortran_array(nn_lines)[:num_dyn_modes]
+        print(f"Detected {num_dyn_modes} dynamic modes.")
+
+        # ---------------------------------------------------------
+        # 2. PARSE THE CONTINUUM DATA
+        # ---------------------------------------------------------
+        print("Reading far3d_continuum.dat...")
+        data = np.loadtxt(continuum_data_path)
+        
+        # Columns based on your output
+        r_col = data[:, 0]
+        freq_col = data[:, 1]
+        idx_col = data[:, 2].astype(int)
+
+        data_dict = {}
+        
+        # Group the data by mode index
+        for i in range(num_dyn_modes):
+            mode_idx = i + 1  # 1-based index matching Fortran loop
+            m = mm_vals[i]
+            n = nn_vals[i]
+            
+            # Filter data for this specific mode index
+            mask = (idx_col == mode_idx)
+            
+            if not np.any(mask):
+                continue
+                
+            mode_r = r_col[mask]
+            mode_freq = freq_col[mask]
+            
+            # We classify all of these as 'a' (Alfvénic) since we disabled the acoustic branches
+            mode_name = f"a_mode_n{n}_m{m}"
+            data_dict[mode_name] = {
+                'type': 'a',
+                'n': n,
+                'm': m,
+                'r_grid': mode_r,
+                'freqs': mode_freq
+            }
+
+        if not data_dict:
+            print("No valid data found to process. Exiting.")
+            return
+
+        # ---------------------------------------------------------
+        # 3. WRITE THE DATA DICT TO THE HDF5 FILE
+        # ---------------------------------------------------------
+        print(f"Writing to {output_hdf5_path}...")
+        with h5py.File(output_hdf5_path, 'w') as f:
+            for mode_key, mode_data in data_dict.items():
+                mode_group = f.create_group(mode_key)
+                for var_key, var_value in mode_data.items():
+                    mode_group.create_dataset(var_key, data=var_value)
+                    
+        print(f"Success! Combined data for {len(data_dict)} modes saved to: {output_hdf5_path}")
+        print('Loading into class object...')
+        self.mode_dict = self.load_hdf5_to_dict(output_hdf5_path)
+
+    def load_hdf5_to_dict(self, filepath):
+        """
+        Reads an ALCON/FAR3D HDF5 file and reconstructs the nested Python dictionary,
+        loading all arrays into RAM.
+        """
+        restored_dict = {}
+        with h5py.File(filepath, 'r') as f:
+            for mode_key in f.keys():
+                mode_group = f[mode_key]
+                restored_dict[mode_key] = {}
+                for var_key in mode_group.keys():
+                    dataset = mode_group[var_key]
+                    
+                    if dataset.shape == (): 
+                        val = dataset[()]
+                        if isinstance(val, bytes):
+                            val = val.decode('utf-8')
+                        restored_dict[mode_key][var_key] = val
+                    else:
+                        restored_dict[mode_key][var_key] = dataset[:]
+                        
+        return restored_dict
+    
+    def plot_alfven_continuum(self, run_dir, load_mode_dict=False, color_points=False, return_fig=False, fig_size=(10,10), plot_acoustic=False, xlims=(0,1), ylims=(0,1), legend=True):
+        if load_mode_dict:
+            output_hdf5_path = run_dir + 'combined_data.h5'
+            self.mode_dict = self.load_hdf5_to_dict(output_hdf5_path)
+
+        # initialize the figure 
+        fig, ax = plt.subplots(1, 1, figsize=fig_size)
+        cmap_alfvenic = plt.get_cmap('jet')
+        cmap_acoustic = plt.get_cmap('Greys')
+
+        with open(run_dir+'conversion_factor.txt', 'r') as f:
+                freq_to_kHz = float(f.read().strip())
+        print(f'Found conversion to kHz: {freq_to_kHz}')
+
+        num_a = 0
+        num_s = 0
+
+        data_dict = self.mode_dict
+
+        for key in data_dict:
+            if data_dict[key]['type'] == 'a':
+                num_a += 1
+            else:
+                num_s += 1
+
+
+        font_size=16
+        i_a = 0
+        i_s = 0
+        for key in data_dict:
+            freqs = data_dict[key]['freqs']
+            m = data_dict[key]['m']
+            n = data_dict[key]['n']
+            rgrid = np.sqrt(data_dict[key]['r_grid'])
+            #rgrid = data_dict[key]['r_grid']
+            wave_type = data_dict[key]['type']
+            if plot_acoustic:
+                wave_type_long = 'Compressional'
+                if color_points:
+                    color = cmap_acoustic((i_s/num_s)/4+0.4)
+                else:
+                    color = 'gray'
+                ax.scatter(rgrid, freqs*freq_to_kHz, s=2, marker='.', color=color, zorder=1)
+                i_s +=1
+            elif wave_type == 'a':
+                wave_type_long = 'Alfvenic'
+                if color_points:
+                    color = cmap_alfvenic(i_a/num_a)
+                else:
+                    color = 'gray'
+                
+                i_a += 1
+                label = f'n:{n}, m:{m}'
+                if legend == False:
+                    label=None
+                if n > 0:
+                    ax.scatter(rgrid, freqs*freq_to_kHz, label=label, marker='.', s=2, color=color, zorder=2)
+
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(True, which='both', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        if legend:
+            ax.legend(fontsize=font_size*.75, bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.set_xlabel('sqrt(far3d_continuum.dat radial grid) ', fontsize=font_size)
+        ax.set_ylabel(r'$\omega$ [kHz]', fontsize=font_size)
+        ax.tick_params(axis='both', labelsize=font_size)
+        ax.set_ylim(ylims[0], ylims[1])
+        ax.set_xlim(xlims[0], xlims[1])
+
+        if return_fig:
+            return fig, ax
+        else:
+            plt.show()
+
+
+    def plot_profile_over_continuum(self, 
+                                    profile_type,
+                                    run_indicator,
+                                    profile_run_dir, 
+                                    matrix_run_dir, 
+                                    load_mode_dict=False, 
+                                    color_points=False, 
+                                    return_fig=False, 
+                                    fig_size=(10,10), 
+                                    plot_acoustic=False, 
+                                    xlims=(0,1), 
+                                    ylims=(0,1),
+                                    rotate=False,
+                                    wave_part='real',
+                                    scale_eigenmode=0.25):
+        # grab the profile data 
+        data_dict = self.data_dict[profile_type]
+        rgrid = data_dict['r']
+        data = data_dict['data']
+        ns = data_dict['ns']
+        ms = data_dict['ms']
+        
+        # --- NEW GLOBAL ROTATION LOGIC ---
+        if rotate:
+            # 1. Find the 2D index of the absolute largest value across ALL modes
+            # np.argmax on a 2D array flattens it, so we unravel it back to (row, col)
+            max_idx = np.unravel_index(np.argmax(np.abs(data)), data.shape)
+            
+            # 2. Extract the phase of that single dominant point
+            global_peak_phase = np.angle(data[max_idx])
+            global_peak_amplitude = np.abs(data[max_idx])
+        # ---------------------------------     
+
+        # now, grab the continuum plot  
+        fig, ax = self.plot_alfven_continuum(run_dir=matrix_run_dir, 
+                              load_mode_dict=load_mode_dict, 
+                              color_points=False, 
+                              return_fig=True, 
+                              fig_size=fig_size, 
+                              plot_acoustic=False, 
+                              xlims=xlims, 
+                              ylims=ylims,
+                              legend=False) 
+        
+        with open(profile_run_dir+'conversion_factor.txt', 'r') as f:
+            freq_to_kHz = float(f.read().strip())
+        print(f'Found conversion to kHz: {freq_to_kHz}')
+
+        # get the fastest growing mode 
+        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(run_indicator=run_indicator, 
+                                                                     directory=profile_run_dir)
+        
+        fkHz = freq_to_kHz * omega_r # fastest growing mode frequency 
+
+        
+        for imode in range(len(ns)):
+            n = ns[imode]
+            m = ms[imode]
+            profile = data[:,imode]
+
+            # now, rotate the wave using the SAME angle for every mode
+            if rotate:
+                profile = profile * np.exp(-1j * global_peak_phase)
+
+            if wave_part == 'real':
+                profile = np.real(profile)
+            elif wave_part == 'imaginary':
+                profile = np.imag(profile)
+            elif wave_part == 'mag':
+                profile = np.abs(profile)
+            else:
+                raise ValueError('Wave plotting type wave_part not understood') 
+            label = f'm/n: {m}/{n}'
+
+            # shift the profile to the frequency, scale  
+            profile = (profile/global_peak_amplitude)*scale_eigenmode*(ylims[1]-ylims[0]) + fkHz
+
+            ax.plot(rgrid, profile, label=label) 
+
+        ax.axhline(y=fkHz, color='black', linestyle='--')
+        ax.legend()
+
+
+    def save_mode_growth_rate_results(self, run_dir):
+        pass
+        
+
+
+
+
+
+        
+
 
 
         
