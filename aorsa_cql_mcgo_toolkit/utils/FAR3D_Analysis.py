@@ -25,6 +25,7 @@ import plasma
 from plasma import equilibrium_process
 import textwrap
 import h5py
+import json
 
 # import Grant's eqdsk processor for getting B info
 from process_eqdsk2 import getGfileDict
@@ -229,7 +230,7 @@ class Far3D_Analysis:
             print(f'Loading {name}')
             self.load_mode_file(filename=file_name, name=name)
 
-    def find_maximum_growth_rate_and_frequency(self, run_indicator, directory):
+    def find_maximum_growth_rate_and_frequency(self, directory):
         # far3d_output_file = directory + f'/farprt{run_indicator}'
         far3d_output_file = directory + f'/farprt'
         best = {'gam': -1e30, 'om_r': 0.0}
@@ -281,10 +282,13 @@ class Far3D_Analysis:
         axes = axs.flatten()
 
         # first, find the fastest growing mode and convert to kHz 
-        omega_A0 = self.calculate_alfven_angular_freq()
-        print(f'Found omega_A0:{omega_A0}')
-        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(run_indicator=run_indicator, directory=directory)
-        un_normalize = omega_A0  / (2 * np.pi * 1000) # to kHz
+        # omega_A0 = self.calculate_alfven_angular_freq()
+        # print(f'Found omega_A0:{omega_A0}')
+        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(directory=directory)
+        # un_normalize = omega_A0  / (2 * np.pi * 1000) # to kHz
+        with open(directory+'conversion_factor.txt', 'r') as f:
+            un_normalize = float(f.read().strip())
+
         print(f'Conversion to KHz: {un_normalize}')
         gamma_kHz = gamma * un_normalize
         omega_r_kHz = omega_r * un_normalize
@@ -534,6 +538,37 @@ class Far3D_Analysis:
             return jouls_to_kev*mass*np.trapz(farray*varray**2, varray) / np.trapz(farray, varray)
         elif F_type == 'speed':
             return  jouls_to_kev*mass*np.trapz(farray, varray) / np.trapz(farray/varray**2, varray)
+        
+
+    def calculate_average_speed(self, varray, farray, F_type='full'):
+        """Calculates the true average speed of a velocity or speed distribution.
+
+        Parameters
+        ----------
+        varray : float array
+            velocity array [m/s]. Must extend over desired part of distribution.  
+        farray : float array
+            distribution value. leading coefficients cancel out
+        F_type : string
+            'full' or 'speed' determining the distribution format
+
+        Returns
+        -------
+        float
+            average speed [m/s]
+        """
+        # We use np.abs(varray) because average speed must be strictly positive, 
+        # even if the velocity array spans from negative to positive.
+        speed_array = np.abs(varray)
+        
+        if F_type == 'full':
+            # Expected value of |v|: integral of |v|*f(v) / integral of f(v)
+            return np.trapz(farray * speed_array, varray) / np.trapz(farray, varray)
+            
+        elif F_type == 'speed':
+            # Following your 'speed' convention: we lower the power of v by 1 
+            # compared to your temperature function.
+            return np.trapz(farray / speed_array, varray) / np.trapz(farray / varray**2, varray)
     
     def maxwell(self, v, n, T, species):
         """maxwellian distribution given v
@@ -1037,7 +1072,10 @@ class Far3D_Analysis:
 
         return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
     
-    def fit_3_maxwellians_to_speed_distribution_bulk_fit_NBI_RF_moments(self, v, F, E_NBI_kev, rho, mode='cql3d', mcgo_energy_filter_kev=30):
+    def fit_3_maxwellians_to_speed_distribution_bulk_fit_NBI_RF_moments(self, v, F, E_NBI_kev, rho, 
+                                                                        mode='cql3d', 
+                                                                        mcgo_energy_filter_kev=30,
+                                                                        return_speeds=False):
         """_summary_
 
         Parameters
@@ -1147,11 +1185,16 @@ class Far3D_Analysis:
         # nbi 
         nNBI = self.integrate_speed_distribution(v=NBI_speeds, F=F_rf_nbi_nbi_speeds)
         TNBI = self.calculate_effective_temperature(varray=NBI_speeds, farray=F_rf_nbi_nbi_speeds, species=self.species, F_type='speed')
-
+        vNBI = self.calculate_average_speed(varray=NBI_speeds, farray=F_rf_nbi_nbi_speeds, F_type='speed')
         # RF 
         nRF = self.integrate_speed_distribution(v=RF_speeds, F=F_rf_nbi_rf_speeds)
         TRF = self.calculate_effective_temperature(varray=RF_speeds, farray=F_rf_nbi_rf_speeds, species=self.species, F_type='speed')
-        return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+        vRF = self.calculate_average_speed(varray=RF_speeds, farray=F_rf_nbi_rf_speeds, F_type='speed')
+        if return_speeds:
+            return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF, vNBI, vRF]
+        else:
+            return [nbulk, Tbulk, nNBI, TNBI, nRF, TRF]
+    
     
     def system_of_equations(self, vars):
         n2, T2, n3, T3 = vars # unpack the variables. n2, n3 are per m^3 / 1e18
@@ -2312,8 +2355,7 @@ class Far3D_Analysis:
         print(f'Found conversion to kHz: {freq_to_kHz}')
 
         # get the fastest growing mode 
-        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(run_indicator=run_indicator, 
-                                                                     directory=profile_run_dir)
+        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(directory=profile_run_dir)
         
         fkHz = freq_to_kHz * omega_r # fastest growing mode frequency 
 
@@ -2346,8 +2388,44 @@ class Far3D_Analysis:
         ax.legend()
 
 
-    def save_mode_growth_rate_results(self, run_dir):
-        pass
+    def save_mode_growth_rate_results(self, run_dir, save_file_path, mode_label='not labeled'):
+        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(directory=run_dir)
+
+        with open(run_dir+'conversion_factor.txt', 'r') as f:
+            freq_to_kHz = float(f.read().strip())
+        print(f'Found conversion to kHz: {freq_to_kHz}')
+
+        save_dict = {}
+        save_dict['freq_to_kHz'] = freq_to_kHz
+        save_dict['gamma'] = gamma
+        save_dict['omega'] = omega_r
+
+        # grab n. Assume that the user only ran with one n, and htey are all the same 
+        data_dict = self.data_dict['br']
+        ns = data_dict['ns']
+        print(ns)
+        n = ns[0]
+
+        save_dict['n'] = n
+        save_dict['Mode Label'] = mode_label
+
+
+        if os.path.exists(save_file_path) and os.path.getsize(save_file_path) > 0:
+            with open(save_file_path, 'r') as file:
+                try:
+                    data_list = json.load(file)
+                except json.JSONDecodeError:
+                    data_list = [] # Failsafe if the file exists but is corrupted/empty
+        else:
+            data_list = [] # File doesn't exist, start a fresh list
+
+        # 2. Append the new dictionary to the Python list
+        data_list.append(save_dict)
+
+        # 3. Open the file in 'w' (write) mode to overwrite it with the updated list
+        # (Using 'w' will automatically create the file if it doesn't exist)
+        with open(save_file_path, 'w') as file:
+            json.dump(data_list, file, indent=4)
         
 
 
