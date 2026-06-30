@@ -429,8 +429,11 @@ if __name__ == "__main__":
     profiles_json = '/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/profiles.json'
     # RF_powers_prefix_list = [300, 1900]
     # NBI_powers_prefix_list = [10]
-    PNBI_PRF_pairs = [('5', '700'),
+    PNBI_PRF_pairs = [('5', '300'), 
+                      ('5', '700'),
+                      ('5', '1100'),
                       ('5', '1500'),
+                      ('5', '1900'),
                       ('7_5', '300'),
                       ('7_5', '700'),
                       ('7_5', '1100'),

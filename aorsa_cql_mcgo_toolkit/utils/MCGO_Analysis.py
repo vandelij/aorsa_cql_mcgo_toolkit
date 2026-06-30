@@ -88,6 +88,7 @@ class MCGO_Post_Process:
         zgrid = self.eqdsk_with_B_info["zgrid"]
         self.R_wall = self.eqdsk["rlim"]
         self.Z_wall = self.eqdsk["zlim"]
+        self.Rcenter = self.eqdsk_with_B_info["rmaxis"]
 
         self.R_lcfs = self.eqdsk["rbbbs"]
         self.Z_lcfs = self.eqdsk["zbbbs"]
@@ -110,9 +111,29 @@ class MCGO_Post_Process:
         self.psirzNorm = (psizr - psi_mag_axis) / (psi_boundary - psi_mag_axis)
         self.getpsirzNorm = RectBivariateSpline(rgrid, zgrid, self.psirzNorm.T)
 
+    # def build_B_midplane_mag_interpolator(self):
+    #     self.B_midplane_mag_interpolator = PchipInterpolator(
+    #         self.rho_grid, self.getBStrength(self.R_f_grid, self.eqdsk['zmaxis'], grid=False)
+    #     )
     def build_B_midplane_mag_interpolator(self):
+        # 1. Mask for the outboard side (Low Field Side)
+        outboard_mask = self.R_f_grid >= self.Rcenter
+        
+        rho_outboard_raw = self.rho_grid[outboard_mask]
+        R_outboard_raw = self.R_f_grid[outboard_mask]
+        
+        # 2. Evaluate the B-field strength ONLY on the outboard R coordinates
+        B_outboard_raw = self.getBStrength(R_outboard_raw, self.eqdsk['zmaxis'], grid=False)
+        
+        # 3. Sort everything by rho to guarantee it is strictly increasing
+        # sort_indices = np.argsort(rho_outboard_raw)
+        
+        # rho_outboard_sorted = rho_outboard_raw[sort_indices]
+        # B_outboard_sorted = B_outboard_raw[sort_indices]
+        
+        # 4. Build the interpolator safely!
         self.B_midplane_mag_interpolator = PchipInterpolator(
-            self.rho_grid, self.getBStrength(self.R_f_grid, self.eqdsk['zmaxis'], grid=False)
+            rho_outboard_raw, B_outboard_raw
         )
 
     def plot_equilibrium(self, figsize, levels=10, fontsize=20, return_plot=False, limiter_color='red'):
@@ -483,10 +504,10 @@ class MCGO_Post_Process:
             B0 = self.B_midplane_mag_interpolator(rho) 
             dB = (B_pi - B0) / B0
             slope = np.sqrt(1/dB)
-            axs[0].axline( (0,0), None, slope=slope, color='r', linestyle='--') 
-            axs[0].axline( (0,0), None, slope=-slope, color='r', linestyle='--')
-            axs[1].axline( (0,0), None, slope=slope, color='r', linestyle='--') 
-            axs[1].axline( (0,0), None, slope=-slope, color='r', linestyle='--')
+            axs[0].axline( (0,0), None, slope=slope, color='limegreen', linestyle='--') 
+            axs[0].axline( (0,0), None, slope=-slope, color='limegreen', linestyle='--')
+            axs[1].axline( (0,0), None, slope=slope, color='limegreen', linestyle='--') 
+            axs[1].axline( (0,0), None, slope=-slope, color='limegreen', linestyle='--')
 
             
 

@@ -9,6 +9,7 @@ import meshio
 from plasma import equilibrium_process
 # import helpers for eqdsk processing
 import plasma
+import string
 
 
 class Aorsa_Analysis():
@@ -479,13 +480,28 @@ class Aorsa_Post_Process():
         axs[1].set_ylabel('Z [m]')
         axs[1].plot(self.R_lcfs, self.Z_lcfs, 'black')
         axs[1].plot(self.R_wall, self.Z_wall)
+        axes_flat = axs.flatten()
+        for i, ax in enumerate(axes_flat):
+            # Plot some dummy data
+            
+            # Generate the letter (a, b, c, d...)
+            letter = string.ascii_lowercase[i]
+            
+            # 3. Add the text
+            # x=-0.1, y=1.05 places it slightly outside the top-left corner.
+            # transform=ax.transAxes binds the coordinates to the plot frame, not the data.
+            ax.text(-0.1, 1.05, f"({letter})", 
+                    transform=ax.transAxes, 
+                    fontsize=12,
+                    va='bottom', 
+                    ha='right')
 
         if return_plot:
             return fig, axs
         plt.plot()
         #plt.close()
         
-    def plot_species_absorption(self, figsize, return_fig=False):
+    def plot_species_absorption(self, figsize, return_fig=False, clip_neg=False):
         ion_names = self.aorsanml['STATE']['S_S_NAME'][1:]
 
         if len(ion_names) > 2:
@@ -493,11 +509,17 @@ class Aorsa_Post_Process():
         else:
             fig, axs = plt.subplots(2, 2, figsize=figsize)
 
-        # plot total abosorption 
-        if self.is_iterable(self.vtk_file):
-            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdot_tot')/1e6, 400, cmap='hot')
+        # plot total abosorption
+        if clip_neg: 
+            if self.is_iterable(self.vtk_file):
+                tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, np.clip(self.get_multifile_sum('wdot_tot')/1e6, 0.0, None), 400, cmap='hot')
+            else:
+                tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, np.clip(self.mesh.point_data['wdot_tot'][:,0]/1e6, 0.0, None), 400, cmap='hot')
         else:
-            tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0]/1e6, 400, cmap='hot')
+            if self.is_iterable(self.vtk_file):
+                tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdot_tot')/1e6, 400, cmap='hot')
+            else:
+                tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0]/1e6, 400, cmap='hot')
 
         cb0 = fig.colorbar(tcf0)
         cb0.set_label(r'MW/$m^3$')
@@ -505,14 +527,20 @@ class Aorsa_Post_Process():
         axs[0,0].set_xlabel('R [m]')
         axs[0,0].set_ylabel('Z [m]')
         axs[0,0].set_title(r'$\dot{w}_{tot}$')
-        axs[0,0].plot(self.R_lcfs, self.Z_lcfs, 'black')
+        axs[0,0].plot(self.R_lcfs, self.Z_lcfs, 'white')
         axs[0,0].plot(self.R_wall, self.Z_wall)
 
         # plot electron absorption 
-        if self.is_iterable(self.vtk_file):
-            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdote')/1e6, 400, cmap='hot')
+        if clip_neg:
+            if self.is_iterable(self.vtk_file):
+                tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, np.clip(self.get_multifile_sum('wdote')/1e6, 0.0, None), 400, cmap='hot')
+            else:
+                tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, np.clip(self.mesh.point_data['wdote'][:,0]/1e6, 0.0, None), 400, cmap='hot')
         else:
-            tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0]/1e6, 400, cmap='hot')
+            if self.is_iterable(self.vtk_file):
+                tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.get_multifile_sum('wdote')/1e6, 400, cmap='hot')
+            else:
+                tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0]/1e6, 400, cmap='hot')
 
         cb1 = fig.colorbar(tcf1)
         cb1.set_label(r'MW/$m^3$')
@@ -520,7 +548,7 @@ class Aorsa_Post_Process():
         axs[0,1].set_xlabel('R [m]')
         axs[0,1].set_ylabel('Z [m]')
         axs[0,1].set_title(r'$\dot{w}_{e}$ Electron Absorption')
-        axs[0,1].plot(self.R_lcfs, self.Z_lcfs, 'black')
+        axs[0,1].plot(self.R_lcfs, self.Z_lcfs, 'white')
         axs[0,1].plot(self.R_wall, self.Z_wall)
 
         for i in range(len(ion_names)):
@@ -541,18 +569,39 @@ class Aorsa_Post_Process():
                 col = 1
             
             key = 'wdoti' + str(i+1)
-            if self.is_iterable(self.vtk_file):
-                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array,  self.get_multifile_sum(key)/1e6, 400, cmap='hot')
+            if clip_neg:
+                if self.is_iterable(self.vtk_file):
+                    tcf=axs[row, col].tricontourf(self.R_array, self.Z_array,  np.clip(self.get_multifile_sum(key)/1e6, 0.0, None), 400, cmap='hot')
+                else:
+                    tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, np.clip(self.mesh.point_data[key][:,0]/1e6, 0.0, None), 400, cmap='hot')
             else:
-                tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0]/1e6, 400, cmap='hot')
+                if self.is_iterable(self.vtk_file):
+                    tcf=axs[row, col].tricontourf(self.R_array, self.Z_array,  self.get_multifile_sum(key)/1e6, 400, cmap='hot')
+                else:
+                    tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0]/1e6, 400, cmap='hot')
             cb = fig.colorbar(tcf)
             cb.set_label(r'MW/$m^3$')
             axs[row, col].axis('equal')
             axs[row, col].set_xlabel('R [m]')
             axs[row, col].set_ylabel('Z [m]')
             axs[row, col].set_title(r'$\dot{w}_i$ ' + f'Ion {str(i+1)} = '+ f'{ion_names[i]} Absorption')
-            axs[row, col].plot(self.R_lcfs, self.Z_lcfs, 'black')
+            axs[row, col].plot(self.R_lcfs, self.Z_lcfs, 'white')
             axs[row, col].plot(self.R_wall, self.Z_wall)
+            axes_flat = axs.flatten()
+            for i, ax in enumerate(axes_flat):
+                # Plot some dummy data
+                
+                # Generate the letter (a, b, c, d...)
+                letter = string.ascii_lowercase[i]
+                
+                # 3. Add the text
+                # x=-0.1, y=1.05 places it slightly outside the top-left corner.
+                # transform=ax.transAxes binds the coordinates to the plot frame, not the data.
+                ax.text(-0.1, 1.05, f"({letter})", 
+                        transform=ax.transAxes, 
+                        fontsize=12,
+                        va='bottom', 
+                        ha='right')
 
         if return_fig:
             return fig, axs

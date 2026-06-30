@@ -501,10 +501,10 @@ class CQL3D_Post_Process:
             B0 = self.B_midplane_mag_interpolator(rho) 
             dB = (B_pi - B0) / B0
             slope = np.sqrt(1/dB)
-            axs[0].axline( (0,0), None, slope=slope, color='r', linestyle='--') 
-            axs[0].axline( (0,0), None, slope=-slope, color='r', linestyle='--')
-            axs[1].axline( (0,0), None, slope=slope, color='r', linestyle='--') 
-            axs[1].axline( (0,0), None, slope=-slope, color='r', linestyle='--')
+            axs[0].axline( (0,0), None, slope=slope, color='limegreen', linestyle='--') 
+            axs[0].axline( (0,0), None, slope=-slope, color='limegreen', linestyle='--')
+            axs[1].axline( (0,0), None, slope=slope, color='limegreen', linestyle='--') 
+            axs[1].axline( (0,0), None, slope=-slope, color='limegreen', linestyle='--')
 
             
 
