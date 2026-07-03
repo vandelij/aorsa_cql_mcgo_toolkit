@@ -331,6 +331,10 @@ def build_run_dict_fsa(run_dir, iteration_index, profiles_json_file, num_mcgo=2)
     NBI_v_over_vA_list = []
     RF_temperature_list = []
     NBI_temperature_list = []
+    RF_perp_temperature_list = []
+    NBI_perp_temperature_list = []
+    RF_par_temperature_list = []
+    NBI_par_temperature_list = []
     RF_far3d_eff_temperature_list = []
     NBI_far3d_eff_temperature_list = []
 
@@ -366,23 +370,34 @@ def build_run_dict_fsa(run_dir, iteration_index, profiles_json_file, num_mcgo=2)
         # factor 
         nNBI = fsa_profile_data['NBI density [m^-3]'][rho_i]
         TNBI = fsa_profile_data['NBI Temp [keV]'][rho_i]
+        TNBIperp = fsa_profile_data['NBI Perp Temp [keV]'][rho_i]
+        TNBIpar = fsa_profile_data['NBI Par Temp [keV]'][rho_i]
 
         nRF = fsa_profile_data['RF density [m^-3]'][rho_i]
         TRF = fsa_profile_data['RF Temp [keV]'][rho_i]
+        TRFperp = fsa_profile_data['RF Perp Temp [keV]'][rho_i]
+        TRFpar = fsa_profile_data['RF Par Temp [keV]'][rho_i]
+
 
         vNBI = fsa_profile_data['NBI speed [m per sec]'][rho_i]
         vRF = fsa_profile_data['RF speed [m per sec]'][rho_i]
+        vperpNBI = fsa_profile_data['NBI perp speed [m per sec]'][rho_i]
+        vperpRF = fsa_profile_data['RF perp speed [m per sec]'][rho_i]
 
-        # factors of 1/3 are because the temp here is far3d notation, missing the 1/3 factor for 3D maxwellian equivilent 
-        betaNBI = nNBI * (TNBI/3) * convert_keV_per_m3_to_J_per_m3 / magnetic_pressure
-        betaRF = nRF * (TRF/3) * convert_keV_per_m3_to_J_per_m3 / magnetic_pressure
+        # factors of *3 are because the temp here is far3d notation, missing the 1/3 factor for 3D maxwellian equivilent 
+        betaNBI = nNBI * (TNBI) * convert_keV_per_m3_to_J_per_m3 / magnetic_pressure
+        betaRF = nRF * (TRF) * convert_keV_per_m3_to_J_per_m3 / magnetic_pressure
 
         NBI_density_list.append(nNBI)
-        NBI_temperature_list.append(TNBI/3)
-        NBI_far3d_eff_temperature_list.append(TNBI)
+        NBI_temperature_list.append(TNBI)
+        NBI_perp_temperature_list.append(TNBIperp)
+        NBI_par_temperature_list.append(TNBIpar)
+        NBI_far3d_eff_temperature_list.append(TNBI*3)
         RF_density_list.append(nRF)
-        RF_temperature_list.append(TRF/3)
-        RF_far3d_eff_temperature_list.append(TRF)
+        RF_temperature_list.append(TRF)
+        RF_perp_temperature_list.append(TRFperp)
+        RF_par_temperature_list.append(TRFpar)
+        RF_far3d_eff_temperature_list.append(TRF*3)
 
         NBI_beta_list.append(betaNBI)
         RF_beta_list.append(betaRF)
@@ -390,8 +405,8 @@ def build_run_dict_fsa(run_dir, iteration_index, profiles_json_file, num_mcgo=2)
         NBI_v_over_vA_list.append(vNBI/vA)
         RF_v_over_vA_list.append(vRF/vA)
 
-        rhoL_NBI = mass*vNBI / (charge * B0)
-        rhoL_RF = mass*vRF / (charge * B0)
+        rhoL_NBI = mass*vperpNBI / (charge * B0)
+        rhoL_RF = mass*vperpRF / (charge * B0)
 
         NBI_rhoL_over_a_list.append(rhoL_NBI/minor_radius)
         RF_rhoL_over_a_list.append(rhoL_RF/minor_radius)
@@ -402,9 +417,13 @@ def build_run_dict_fsa(run_dir, iteration_index, profiles_json_file, num_mcgo=2)
     data_dict['NBI density [m^-3]'] = NBI_density_list
     data_dict['RF density [m^-3]'] = RF_density_list
     data_dict['NBI Temp [keV]'] = NBI_temperature_list
+    data_dict['NBI Perp Temp [keV]'] = NBI_perp_temperature_list
+    data_dict['NBI Par Temp [keV]'] = NBI_par_temperature_list
     data_dict['RF Temp [keV]'] = RF_temperature_list
     data_dict['NBI Far3D eff. Temp [keV]'] = NBI_far3d_eff_temperature_list
     data_dict['RF Far3D eff. Temp [keV]'] = RF_far3d_eff_temperature_list
+    data_dict['RF Perp Temp [keV]'] = RF_perp_temperature_list
+    data_dict['RF Par Temp [keV]'] = RF_par_temperature_list
     data_dict['NBI beta'] = NBI_beta_list
     data_dict['RF beta'] = RF_beta_list
     data_dict['NBI rhoL_per_a'] = NBI_rhoL_over_a_list 
@@ -423,10 +442,11 @@ def build_run_dict_fsa(run_dir, iteration_index, profiles_json_file, num_mcgo=2)
     return data_dict
 
 if __name__ == "__main__":
-    data_file = '/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/paper2_scans/scan_data.h5'
-    scan_dir = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/paper2_scans/"
-    eqdsk_file = "/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/g147634.04525"
-    profiles_json = '/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/147634/profiles.json'
+    shotnum = '201991'
+    data_file = f'/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/{shotnum}/paper2_scans/scan_data.h5'
+    scan_dir = f"/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/{shotnum}/paper2_scans/"
+    eqdsk_file = f"/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/201991/g201991.03498"
+    profiles_json = f'/home/jacobvandelindt/aorsa_cql_mcgo_toolkit/shots/{shotnum}/profiles.json'
     # RF_powers_prefix_list = [300, 1900]
     # NBI_powers_prefix_list = [10]
     PNBI_PRF_pairs = [('5', '300'), 
@@ -445,13 +465,13 @@ if __name__ == "__main__":
                       ('10', '1500'),
                       ('10', '1900')]
     
-    iteration_index = 15
+    iteration_index = 4
 
     for PNBI_PRF_pair in PNBI_PRF_pairs:
         PNBI, PRF = PNBI_PRF_pair
         print(f'Processing PNBI {PNBI}, PRF {PRF}...')
-        run_dir = f'beamtot_{PNBI}_RFtot_{PRF}/'
-        run_name = f'beamtot_{PNBI}_RFtot_{PRF}'
+        run_dir = f'sup_beamtot_{PNBI}_RFtot_{PRF}/'
+        run_name = f'sup_beamtot_{PNBI}_RFtot_{PRF}'
         run_dict = build_run_dict_fsa(run_dir=scan_dir+run_dir, 
                                     profiles_json_file=profiles_json,
                                     iteration_index=iteration_index)

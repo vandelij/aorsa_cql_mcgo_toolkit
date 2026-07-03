@@ -135,6 +135,136 @@ class MCGO_Post_Process:
         self.B_midplane_mag_interpolator = PchipInterpolator(
             rho_outboard_raw, B_outboard_raw
         )
+    def get_volume_elements_contour(self, target_rho_grid):
+        """
+        Calculates the discrete volume elements (dvol in m^3) for a given rho_pol grid 
+        by extracting sub-grid continuous contours and applying Green's Theorem.
+        """
+        # 1. Reconstruct the 2D rho_pol grid
+        nx = self.eqdsk_with_B_info['mw']
+        ny = self.eqdsk_with_B_info['mh']
+        rleft = self.eqdsk_with_B_info['rgrid1']
+        rdim = self.eqdsk_with_B_info['xdim']
+        zmid = self.eqdsk_with_B_info['zmid']
+        zdim = self.eqdsk_with_B_info['zdim']
+        
+        R_1d = np.linspace(rleft, rleft + rdim, nx)
+        Z_1d = np.linspace(zmid - zdim / 2.0, zmid + zdim / 2.0, ny)
+        R_2d, Z_2d = np.meshgrid(R_1d, Z_1d, indexing='ij')
+        
+        # Convert EQDSK psi map to rho_pol
+        psi_mag = self.eqdsk_with_B_info['ssimag']
+        psi_bry = self.eqdsk_with_B_info['ssibdry']
+        psi_2d = self.eqdsk_with_B_info['psirz'] 
+        
+        psi_norm_2d = (psi_2d - psi_mag) / (psi_bry - psi_mag)
+        rho_p_2d = np.sqrt(np.clip(psi_norm_2d, 0.0, None))
+        
+        # 2. Calculate the boundaries of the target rho bins
+        sorted_target = np.sort(target_rho_grid)
+        bounds = np.zeros(len(sorted_target) + 1)
+        bounds[1:-1] = (sorted_target[:-1] + sorted_target[1:]) / 2.0
+        bounds[0] = 0.0
+        outer_diff = sorted_target[-1] - bounds[-2]
+        bounds[-1] = sorted_target[-1] + outer_diff
+        
+        # 3. Extract sub-grid contours using Matplotlib
+        # We create a hidden figure so it doesn't accidentally pop up during execution
+        fig, ax = plt.subplots()
+        cs = ax.contour(R_2d, Z_2d, rho_p_2d, levels=bounds)
+        
+        V_at_bounds = np.zeros(len(bounds))
+        
+        for i, level in enumerate(bounds):
+            if level == 0.0:
+                V_at_bounds[i] = 0.0
+                continue
+                
+            # Get all sub-paths for this contour level
+            paths = cs.collections[i].get_paths()
+            if not paths:
+                # If the contour escapes the bounding box entirely
+                V_at_bounds[i] = V_at_bounds[i-1] if i > 0 else 0.0
+                continue
+                
+            # 4. Integrate the volume using Green's Theorem
+            # We loop through paths and take the max volume, since the largest 
+            # closed loop is the primary flux surface (ignoring small noise artifacts)
+            max_vol = 0.0
+            for path in paths:
+                v = path.vertices
+                R_c = v[:, 0]
+                Z_c = v[:, 1]
+                
+                # Exact 3D volume of a revolved polygon (conical frustums)
+                term = (Z_c[1:] - Z_c[:-1]) * (R_c[:-1]**2 + R_c[:-1]*R_c[1:] + R_c[1:]**2)
+                
+                # Absolute value handles whether matplotlib drew it clockwise or counter-clockwise
+                vol = abs((np.pi / 3.0) * np.sum(term))
+                
+                if vol > max_vol:
+                    max_vol = vol
+                    
+            V_at_bounds[i] = max_vol
+            
+        # Close the hidden figure to free memory
+        plt.close(fig) 
+        
+        # 5. Calculate bin volume (dV) by taking the difference between boundaries
+        target_dvols = np.diff(V_at_bounds)
+        
+        return target_dvols
+    # def get_volume_elements(self, target_rho_grid):
+    #     """
+    #     Calculates the discrete volume elements (dvol in m^3) for a given rho_pol grid 
+    #     by mapping the boundaries and taking the difference of the exact geometric cumulative volume.
+    #     """
+    #     # 1. Reconstruct the 2D rho_pol grid from the EQDSK
+    #     nx = self.eqdsk_with_B_info['mw']        # Integer (number of R points)
+    #     ny = self.eqdsk_with_B_info['mh']        # Integer (number of Z points)
+    #     rleft = self.eqdsk_with_B_info['rgrid1'] # Float (meters)
+    #     rdim = self.eqdsk_with_B_info['xdim']    # Float (meters)
+    #     zmid = self.eqdsk_with_B_info['zmid']    # Float (meters)
+    #     zdim = self.eqdsk_with_B_info['zdim']    # Float (meters)
+        
+    #     R_1d = np.linspace(rleft, rleft + rdim, nx)
+    #     Z_1d = np.linspace(zmid - zdim / 2.0, zmid + zdim / 2.0, ny)
+    #     R_2d, Z_2d = np.meshgrid(R_1d, Z_1d, indexing='ij')
+        
+    #     # Volume of each 2D pixel (toroidal ring)
+    #     dR = R_1d[1] - R_1d[0]
+    #     dZ = Z_1d[1] - Z_1d[0]
+    #     pixel_vols = 2 * np.pi * R_2d * dR * dZ
+        
+    #     # Convert EQDSK psi map to rho_pol
+    #     psi_mag = self.eqdsk_with_B_info['ssimag']
+    #     psi_bry = self.eqdsk_with_B_info['ssibdry']
+    #     psi_2d = self.eqdsk_with_B_info['psirz'] 
+        
+    #     psi_norm_2d = (psi_2d - psi_mag) / (psi_bry - psi_mag)
+    #     rho_p_2d = np.sqrt(np.clip(psi_norm_2d, 0.0, None))
+        
+    #     # 2. Create a smooth cumulative volume curve V(rho_p)
+    #     # Note: We extend fine_rhos slightly past 1.0 to safely bound edge points
+    #     fine_rhos = np.linspace(0.0, 1.1, 200)
+    #     cum_vols = np.zeros_like(fine_rhos)
+    #     for i, r in enumerate(fine_rhos):
+    #         cum_vols[i] = np.sum(pixel_vols[rho_p_2d <= r])
+            
+    #     V_interp = PchipInterpolator(fine_rhos, cum_vols)
+        
+    #     # 3. Calculate the boundaries of the target rho bins
+    #     bounds = np.zeros(len(target_rho_grid) + 1)
+    #     bounds[1:-1] = (target_rho_grid[:-1] + target_rho_grid[1:]) / 2.0
+    #     bounds[0] = 0.0
+    #     bounds[-1] = target_rho_grid[-1] + (target_rho_grid[-1] - bounds[-2])
+        
+    #     # 4. Calculate bin volume (dV) by taking the difference between bounds
+    #     V_at_bounds = V_interp(bounds)
+    #     target_dvols = np.diff(V_at_bounds)
+        
+    #     return target_dvols
+    
 
     def plot_equilibrium(self, figsize, levels=10, fontsize=20, return_plot=False, limiter_color='red'):
         fig, ax = plt.subplots(figsize=figsize)
