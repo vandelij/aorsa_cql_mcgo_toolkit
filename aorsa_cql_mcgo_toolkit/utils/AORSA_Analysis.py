@@ -10,6 +10,7 @@ from plasma import equilibrium_process
 # import helpers for eqdsk processing
 import plasma
 import string
+import re
 
 
 class Aorsa_Analysis():
@@ -430,10 +431,80 @@ class Aorsa_Post_Process():
         else:
             raise ValueError('This helper function only is valid when multifile mode is being used.')
 
-    def plot_Eplus_Eminus(self, cmap='viridis', figsize=(6,6), logplot=False, return_plot=False):
+    # def plot_Eplus_Eminus(self, cmap='viridis', figsize=(6,6), logplot=False, return_plot=False):
+    #     fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+    #     # plot total abosorption 
+    #     if logplot:
+    #         if self.is_iterable(self.vtk_file):
+    #             eminus_sum = self.get_multifile_sum('re_eminus')
+    #             eplus_sum = self.get_multifile_sum('re_eplus')
+    #             toplot0 = np.log(np.abs(eminus_sum)+1)
+    #             toplot1 = np.log(np.abs(eplus_sum)+1)
+    #         else:
+    #             toplot0 = np.log(np.abs(self.mesh.point_data['re_eminus'][:,0])+1)
+    #             toplot1 = np.log(np.abs(self.mesh.point_data['re_eplus'][:,0])+1)
+
+    #         tcf0=axs[0].tricontourf(self.R_array, self.Z_array, toplot0, 400, cmap=cmap)
+    #         axs[0].set_title(r'ln(|Re(E$_{-}$)| + 1)')
+            
+    #         tcf1=axs[1].tricontourf(self.R_array, self.Z_array, toplot1, 400, cmap=cmap)
+    #         axs[1].set_title(r'ln(|Re(E$_{+}$)| + 1)')
+
+    #     else:
+    #         if self.is_iterable(self.vtk_file):
+    #             eminus = self.get_multifile_sum('re_eminus')
+    #             eplus = self.get_multifile_sum('re_eplus')
+
+    #         else:
+    #             eminus = self.mesh.point_data['re_eminus'][:,0]
+    #             eplus = self.mesh.point_data['re_eplus'][:,0]
+
+    #         tcf0=axs[0].tricontourf(self.R_array, self.Z_array, eminus, 400, cmap=cmap)
+    #         tcf1=axs[1].tricontourf(self.R_array, self.Z_array, eplus, 400, cmap=cmap)
+    #         axs[0].set_title(r'Re(E$_{-}$)')
+    #         axs[1].set_title(r'Re(E$_{+}$)')
+
+
+    #     cb0 = fig.colorbar(tcf0)
+    #     cb0.set_label(r'arb. units')
+    #     axs[0].axis('equal')
+    #     axs[0].set_xlabel('R [m]')
+    #     axs[0].set_ylabel('Z [m]')
+    #     axs[0].plot(self.R_lcfs, self.Z_lcfs, 'black')
+    #     axs[0].plot(self.R_wall, self.Z_wall)
+
+    #     cb1 = fig.colorbar(tcf1)
+    #     cb1.set_label(r'arb. units')
+    #     axs[1].axis('equal')
+    #     axs[1].set_xlabel('R [m]')
+    #     axs[1].set_ylabel('Z [m]')
+    #     axs[1].plot(self.R_lcfs, self.Z_lcfs, 'black')
+    #     axs[1].plot(self.R_wall, self.Z_wall)
+    #     axes_flat = axs.flatten()
+    #     for i, ax in enumerate(axes_flat):
+    #         # Plot some dummy data
+            
+    #         # Generate the letter (a, b, c, d...)
+    #         letter = string.ascii_lowercase[i]
+            
+    #         # 3. Add the text
+    #         # x=-0.1, y=1.05 places it slightly outside the top-left corner.
+    #         # transform=ax.transAxes binds the coordinates to the plot frame, not the data.
+    #         ax.text(-0.1, 1.05, f"({letter})", 
+    #                 transform=ax.transAxes, 
+    #                 fontsize=12,
+    #                 va='bottom', 
+    #                 ha='right')
+
+    #     if return_plot:
+    #         return fig, axs
+    #     plt.plot()
+    #     #plt.close()
+
+    def plot_Eplus_Eminus(self, cmap='bwr', figsize=(6,6), logplot=False, return_plot=False, fontsize=12):
         fig, axs = plt.subplots(1, 2, figsize=figsize)
 
-        # plot total abosorption 
         if logplot:
             if self.is_iterable(self.vtk_file):
                 eminus_sum = self.get_multifile_sum('re_eminus')
@@ -444,64 +515,150 @@ class Aorsa_Post_Process():
                 toplot0 = np.log(np.abs(self.mesh.point_data['re_eminus'][:,0])+1)
                 toplot1 = np.log(np.abs(self.mesh.point_data['re_eplus'][:,0])+1)
 
-            tcf0=axs[0].tricontourf(self.R_array, self.Z_array, toplot0, 400, cmap=cmap)
-            axs[0].set_title(r'ln(|Re(E$_{-}$)| + 1)')
+            # Force symmetric levels around 0 
+            vmax0 = np.max(np.abs(toplot0))
+            levels0 = np.linspace(-vmax0, vmax0, 400)
+            tcf0 = axs[0].tricontourf(self.R_array, self.Z_array, toplot0, levels=levels0, cmap=cmap)
+            axs[0].set_title(r'ln(|Re(E$_{-}$)| + 1)', fontsize=fontsize)
             
-            tcf1=axs[1].tricontourf(self.R_array, self.Z_array, toplot1, 400, cmap=cmap)
-            axs[1].set_title(r'ln(|Re(E$_{+}$)| + 1)')
+            vmax1 = np.max(np.abs(toplot1))
+            levels1 = np.linspace(-vmax1, vmax1, 400)
+            tcf1 = axs[1].tricontourf(self.R_array, self.Z_array, toplot1, levels=levels1, cmap=cmap)
+            axs[1].set_title(r'ln(|Re(E$_{+}$)| + 1)', fontsize=fontsize)
 
         else:
             if self.is_iterable(self.vtk_file):
                 eminus = self.get_multifile_sum('re_eminus')
                 eplus = self.get_multifile_sum('re_eplus')
-
             else:
                 eminus = self.mesh.point_data['re_eminus'][:,0]
                 eplus = self.mesh.point_data['re_eplus'][:,0]
 
-            tcf0=axs[0].tricontourf(self.R_array, self.Z_array, eminus, 400, cmap=cmap)
-            tcf1=axs[1].tricontourf(self.R_array, self.Z_array, eplus, 400, cmap=cmap)
-            axs[0].set_title(r'Re(E$_{-}$)')
-            axs[1].set_title(r'Re(E$_{+}$)')
+            # Force symmetric levels around 0
+            vmax0 = np.max(np.abs(eminus))
+            levels0 = np.linspace(-vmax0, vmax0, 400)
+            tcf0 = axs[0].tricontourf(self.R_array, self.Z_array, eminus, levels=levels0, cmap=cmap)
+            axs[0].set_title(r'Re(E$_{-}$)', fontsize=fontsize)
+            
+            vmax1 = np.max(np.abs(eplus))
+            levels1 = np.linspace(-vmax1, vmax1, 400)
+            tcf1 = axs[1].tricontourf(self.R_array, self.Z_array, eplus, levels=levels1, cmap=cmap)
+            axs[1].set_title(r'Re(E$_{+}$)', fontsize=fontsize)
 
-
-        cb0 = fig.colorbar(tcf0)
-        cb0.set_label(r'arb. units')
+        # --- Setup ax0 ---
+        cb0 = fig.colorbar(tcf0, ax=axs[0])
+        cb0.set_label('arb. units', fontsize=fontsize*0.8)
+        cb0.ax.tick_params(labelsize=fontsize*0.8) # Update colorbar ticks
+        
         axs[0].axis('equal')
-        axs[0].set_xlabel('R [m]')
-        axs[0].set_ylabel('Z [m]')
+        axs[0].set_xlabel('R [m]', fontsize=fontsize)
+        axs[0].set_ylabel('Z [m]', fontsize=fontsize)
+        axs[0].tick_params(axis='both', which='major', labelsize=fontsize) # Update ax0 ticks
         axs[0].plot(self.R_lcfs, self.Z_lcfs, 'black')
         axs[0].plot(self.R_wall, self.Z_wall)
 
-        cb1 = fig.colorbar(tcf1)
-        cb1.set_label(r'arb. units')
+        # --- Setup ax1 ---
+        cb1 = fig.colorbar(tcf1, ax=axs[1])
+        cb1.set_label('arb. units', fontsize=fontsize*0.8)
+        cb1.ax.tick_params(labelsize=fontsize*0.8) # Update colorbar ticks
+        
         axs[1].axis('equal')
-        axs[1].set_xlabel('R [m]')
-        axs[1].set_ylabel('Z [m]')
+        axs[1].set_xlabel('R [m]', fontsize=fontsize)
+        #axs[1].set_ylabel('Z [m]', fontsize=fontsize)
+        axs[1].tick_params(axis='both', which='major', labelsize=fontsize) # Update ax1 ticks
         axs[1].plot(self.R_lcfs, self.Z_lcfs, 'black')
         axs[1].plot(self.R_wall, self.Z_wall)
+        
+        # --- Setup Subplot Labels ---
         axes_flat = axs.flatten()
         for i, ax in enumerate(axes_flat):
-            # Plot some dummy data
-            
             # Generate the letter (a, b, c, d...)
             letter = string.ascii_lowercase[i]
             
-            # 3. Add the text
-            # x=-0.1, y=1.05 places it slightly outside the top-left corner.
-            # transform=ax.transAxes binds the coordinates to the plot frame, not the data.
+            # Add the text with dynamic fontsize
             ax.text(-0.1, 1.05, f"({letter})", 
                     transform=ax.transAxes, 
-                    fontsize=12,
+                    fontsize=fontsize,
                     va='bottom', 
                     ha='right')
 
         if return_plot:
             return fig, axs
-        plt.plot()
-        #plt.close()
+            
+        plt.show()
+
+    def parse_out38(self, filepath):
+        print("Loading and analyzing AORSA out38 file structure...")
         
-    def plot_species_absorption(self, figsize, return_fig=False, clip_neg=False):
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+            
+        # --- Step 1: Find the flat array indices of all single-integer lines ---
+        word_count = 0
+        candidate_indices = []
+        candidate_vals = []
+        
+        for line in lines:
+            parts = line.split()
+            # A pure integer line (no decimals, no E, just digits)
+            if len(parts) == 1 and parts[0].isdigit():
+                candidate_indices.append(word_count)
+                candidate_vals.append(int(parts[0]))
+            # Keep a running tally of exactly how many numbers we've seen
+            word_count += len(parts)
+            
+        # --- Step 2: Identify nnoderho by finding its spacing to mnodetheta ---
+        # The number of floats between nnoderho and mnodetheta should be exactly 2 * nnoderho
+        nnoderho_idx = None
+        for i in range(len(candidate_indices) - 1):
+            val = candidate_vals[i]
+            idx_current = candidate_indices[i]
+            idx_next = candidate_indices[i+1]
+            
+            if idx_next - idx_current == (2 * val + 1):
+                nnoderho_idx = idx_current
+                break
+                
+        if nnoderho_idx is None:
+            raise ValueError("Could not find the nnoderho anchor pattern in the file.")
+
+        # --- Step 3: Clean Fortran formatting and parse the floats ---
+        print("Parsing numbers...")
+        raw_text = "".join(lines)
+        raw_text = raw_text.replace('D', 'e').replace('d', 'e')
+        raw_text = re.sub(r'(?<=\d)([+-])(?=\d{2,3})', r'e\1', raw_text)
+        
+        data = np.array(raw_text.split(), dtype=float)
+        
+        # --- Step 4: Extract the arrays using our verified anchor ---
+        idx = nnoderho_idx
+        nnoderho = int(data[idx])
+        idx += 1
+        
+        rhon = data[idx : idx+nnoderho]
+        idx += nnoderho
+        
+        idx += nnoderho # skip gradprlb_avg
+        
+        mnodetheta = int(data[idx])
+        idx += 1
+        
+        idx += mnodetheta # skip thetam
+        
+        dvol = data[idx : idx+nnoderho]
+        idx += nnoderho
+        
+        idx += nnoderho # skip volume
+        idx += nnoderho # skip xnavg
+        idx += nnoderho # skip wdoteavg
+        
+        wdoti1avg = data[idx : idx+nnoderho]
+        
+        print(f"Success! Found nnoderho={nnoderho}, mnodetheta={mnodetheta}")
+        
+        return rhon, dvol, wdoti1avg
+ 
+    def plot_species_absorption(self, figsize, return_fig=False, clip_neg=False, fontsize=16):
         ion_names = self.aorsanml['STATE']['S_S_NAME'][1:]
 
         if len(ion_names) > 2:
@@ -522,11 +679,13 @@ class Aorsa_Post_Process():
                 tcf0=axs[0,0].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdot_tot'][:,0]/1e6, 400, cmap='hot')
 
         cb0 = fig.colorbar(tcf0)
-        cb0.set_label(r'MW/$m^3$')
+        cb0.set_label(r'MW/$m^3$', fontsize=fontsize)
+        cb0.ax.tick_params(labelsize=fontsize)
         axs[0,0].axis('equal')
-        axs[0,0].set_xlabel('R [m]')
-        axs[0,0].set_ylabel('Z [m]')
-        axs[0,0].set_title(r'$\dot{w}_{tot}$')
+        axs[0,0].set_xlabel('R [m]', fontsize=fontsize)
+        axs[0,0].set_ylabel('Z [m]', fontsize=fontsize)
+        axs[0,0].set_title(r'$\dot{w}_{tot}$', fontsize=fontsize)
+        axs[0,0].tick_params(axis='both', labelsize=fontsize)
         axs[0,0].plot(self.R_lcfs, self.Z_lcfs, 'white')
         axs[0,0].plot(self.R_wall, self.Z_wall)
 
@@ -543,11 +702,13 @@ class Aorsa_Post_Process():
                 tcf1=axs[0,1].tricontourf(self.R_array, self.Z_array, self.mesh.point_data['wdote'][:,0]/1e6, 400, cmap='hot')
 
         cb1 = fig.colorbar(tcf1)
-        cb1.set_label(r'MW/$m^3$')
+        cb1.set_label(r'MW/$m^3$', fontsize=fontsize)
+        cb1.ax.tick_params(labelsize=fontsize)
         axs[0,1].axis('equal')
-        axs[0,1].set_xlabel('R [m]')
-        axs[0,1].set_ylabel('Z [m]')
-        axs[0,1].set_title(r'$\dot{w}_{e}$ Electron Absorption')
+        axs[0,1].set_xlabel('R [m]', fontsize=fontsize)
+        #axs[0,1].set_ylabel('Z [m]', fontsize=fontsize)
+        axs[0,1].set_title(r'$\dot{w}_{e}$ Electron Absorption', fontsize=fontsize)
+        axs[0,1].tick_params(axis='both', labelsize=fontsize)
         axs[0,1].plot(self.R_lcfs, self.Z_lcfs, 'white')
         axs[0,1].plot(self.R_wall, self.Z_wall)
 
@@ -555,15 +716,12 @@ class Aorsa_Post_Process():
             if i == 0:
                 row = 1
                 col= 0
-
             elif i == 1:
                 row = 1
                 col = 1
-
             elif i == 2:
                 row = 2
                 col = 0
-
             elif i == 3:
                 row = 2
                 col = 1
@@ -579,29 +737,38 @@ class Aorsa_Post_Process():
                     tcf=axs[row, col].tricontourf(self.R_array, self.Z_array,  self.get_multifile_sum(key)/1e6, 400, cmap='hot')
                 else:
                     tcf=axs[row, col].tricontourf(self.R_array, self.Z_array, self.mesh.point_data[key][:,0]/1e6, 400, cmap='hot')
+            
             cb = fig.colorbar(tcf)
-            cb.set_label(r'MW/$m^3$')
+            cb.set_label(r'MW/$m^3$', fontsize=fontsize)
+            cb.ax.tick_params(labelsize=fontsize)
             axs[row, col].axis('equal')
-            axs[row, col].set_xlabel('R [m]')
-            axs[row, col].set_ylabel('Z [m]')
-            axs[row, col].set_title(r'$\dot{w}_i$ ' + f'Ion {str(i+1)} = '+ f'{ion_names[i]} Absorption')
+            axs[row, col].set_xlabel('R [m]', fontsize=fontsize)
+            if col == 0:
+                axs[row, col].set_ylabel('Z [m]', fontsize=fontsize)
+            axs[row, col].set_title(r'$\dot{w}_i$ ' + f'Ion {str(i+1)} = '+ f'{ion_names[i]} Absorption', fontsize=fontsize)
+            axs[row, col].tick_params(axis='both', labelsize=fontsize)
             axs[row, col].plot(self.R_lcfs, self.Z_lcfs, 'white')
             axs[row, col].plot(self.R_wall, self.Z_wall)
-            axes_flat = axs.flatten()
-            for i, ax in enumerate(axes_flat):
-                # Plot some dummy data
+            
+        # Outdented the ABC lettering block to run once at the end
+        axes_flat = axs.flatten()
+        letter_idx = 0
+        for ax in axes_flat:
+            # Hide axes that didn't get any plots (e.g., the 6th box if only 3 ions)
+            if not ax.has_data():
+                ax.axis('off')
+                continue
                 
-                # Generate the letter (a, b, c, d...)
-                letter = string.ascii_lowercase[i]
-                
-                # 3. Add the text
-                # x=-0.1, y=1.05 places it slightly outside the top-left corner.
-                # transform=ax.transAxes binds the coordinates to the plot frame, not the data.
-                ax.text(-0.1, 1.05, f"({letter})", 
-                        transform=ax.transAxes, 
-                        fontsize=12,
-                        va='bottom', 
-                        ha='right')
+            # Generate the letter (a, b, c, d...)
+            letter = string.ascii_lowercase[letter_idx]
+            letter_idx += 1
+            
+            # 3. Add the text
+            ax.text(-0.1, 1.05, f"({letter})", 
+                    transform=ax.transAxes, 
+                    fontsize=fontsize,
+                    va='bottom', 
+                    ha='right')
 
         if return_fig:
             return fig, axs
