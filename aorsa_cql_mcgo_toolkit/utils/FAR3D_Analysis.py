@@ -26,6 +26,7 @@ from plasma import equilibrium_process
 import textwrap
 import h5py
 import json
+from freeqdsk import geqdsk
 
 # import Grant's eqdsk processor for getting B info
 from process_eqdsk2 import getGfileDict
@@ -35,18 +36,20 @@ class Far3D_Analysis:
     Class to post-process output from Far3d 
     """
 
-    def __init__(self, eqdsk_file=None, species='d'):
+    def __init__(self, eqdsk_file=None, species='d', fast_species='d'):
         self.eqdsk_file = eqdsk_file
         self.species = species
+        self.fast_species = fast_species
         # load up eqdsk using john's methods
         if self.eqdsk_file is not None:
             self.process_eqdsk()     
 
 
-        # assign mass from supported mcgo species
+        # assign mass 
         self.species_dict = {}
         self.species_dict['d'] = {'mass':3.343583e-27, 'charge':1.6022e-19}
         self.species_dict['dt-mix'] = {'mass':3.343583e-27*2.5/2, 'charge':1.6022e-19}
+        self.species_dict['alpha'] = {'mass':3.343583e-27*2, 'charge':2*1.6022e-19}
 
         self.data_dict = {} # will hold all of the far3d output data
         self.case_txt_dict = {} # will hold the profiles for the case to aid in setup 
@@ -465,7 +468,7 @@ class Far3D_Analysis:
         
         self.case_txt_dict[profile_name] = profile_array
         
-    def setup_far3d_run_txt_file(self, out_txt_file_path):
+    def setup_far3d_run_txt_file(self, out_txt_file_path, ion_mass_to_p_mass=2):
         data = np.zeros((len(self.case_txt_dict['rho_e']), len(self.headers)))
 
         i = 0
@@ -499,7 +502,7 @@ class Far3D_Analysis:
         Main Contaminant Species
             12C
         Main Ion Species mass/proton mass
-            2.0
+            {ion_mass_to_p_mass:.1f}
         TRYING TO GET TO BETA(0)=0.011, Rmax=1.71
 
         {", ".join(self.headers)}""")
@@ -1625,8 +1628,125 @@ class Far3D_Analysis:
 
 
 
+    # def build_far3d_outfile(self, 
+    #                         rho_array_for_far3d, 
+    #                         mode='cql3d', 
+    #                         cql_or_mcgo_pp=None, 
+    #                         E_NBI_kev=80, 
+    #                         num_iter_max=10000, 
+    #                         index_to_cut=0, 
+    #                         mcgo_energy_filter_kev=30, 
+    #                         mcgo_p2f_aorsa_h5_file=None, 
+    #                         s_density=0.05, 
+    #                         s_temp=0.05):
+    #     """
+    #     Builds the FAR3D external profiles file using specified input mode data.
+    #     Supported modes: 'cql3d', 'mcgo', 'mcgo_p2f_aorsa'
+    #     """
+    #     # --- Step 1: Mode-Specific Interpolator Setup ---
+    #     if mode in ['cql3d', 'mcgo']:
+    #         if mode == 'cql3d':
+    #             rya, vs, F_of_v_indexable_by_rho = self.convert_cql3d_distribution_into_F_of_v_indexable_by_rho(
+    #                 cql_or_mcgo_pp, index_to_cut=index_to_cut
+    #             )
+    #         else:  # mcgo
+    #             rya, vs, F_of_v_indexable_by_rho = self.convert_mcgo_distribution_into_F_of_v_indexable_by_rho(
+    #                 cql_or_mcgo_pp
+    #             )
+
+    #         # Build profile interpolators via kinetic distribution fitting
+    #         self.get_energetic_profiles(
+    #             rho_array_F_of_v_indexable_by_rho=rya, 
+    #             v_array_F_of_v_indexable_by_rho=vs, 
+    #             F_of_v_indexable_by_rho=F_of_v_indexable_by_rho, 
+    #             E_NBI_kev=E_NBI_kev, 
+    #             num_iter_max=num_iter_max, 
+    #             return_arrays=False,
+    #             mode=mode,
+    #             mcgo_energy_filter_kev=mcgo_energy_filter_kev
+    #         )
+
+    #     elif mode == 'mcgo_p2f_aorsa':
+    #         # Build profile interpolators directly from H5 macro-data
+    #         self.get_energetic_profiles(
+    #             return_arrays=False,
+    #             mode='mcgo_p2f_aorsa',
+    #             mcgo_p2f_aorsa_h5_file=mcgo_p2f_aorsa_h5_file,
+    #             s_density=s_density,
+    #             s_temp=s_temp
+    #         )
+    #     else:
+    #         raise ValueError(f"Unknown mode: {mode}. Must be 'cql3d', 'mcgo', or 'mcgo_p2f_aorsa'.")
+
+    #     # --- Step 2: Unified Profile Processing Pipeline (No More Duplication) ---
+    #     kev_to_J = 1.6022e-19 * 1000
+
+    #     # Evaluate core profiles onto the FAR3D radial grid
+    #     nbulk_profile_for_far3d = self.nbulks_interp(rho_array_for_far3d)
+    #     Tbulk_profile_for_far3d = self.Tbulks_interp(rho_array_for_far3d)
+    #     p_kPa_bulk = nbulk_profile_for_far3d * Tbulk_profile_for_far3d * kev_to_J / 1000
+
+    #     nNBI_profile_for_far3d = self.nNBIs_interp(rho_array_for_far3d)
+    #     TNBI_profile_for_far3d = self.TNBIs_interp(rho_array_for_far3d)
+    #     p_kPa_NBI = nNBI_profile_for_far3d * TNBI_profile_for_far3d * kev_to_J / 1000
+    #     self.p_kPa_NBI = p_kPa_NBI
+
+    #     nRF_profile_for_far3d = self.nRFs_interp(rho_array_for_far3d)
+    #     TRF_profile_for_far3d = self.TRFs_interp(rho_array_for_far3d)
+    #     p_kPa_RF = nRF_profile_for_far3d * TRF_profile_for_far3d * kev_to_J / 1000
+    #     self.p_kPa_RF = p_kPa_RF
+
+    #     # Electrons
+    #     ne_profile_for_far3d = self.ne_interpolator_m3(rho_array_for_far3d)
+    #     Te_profile_for_far3d = self.Te_interpolator_kev(rho_array_for_far3d)
+    #     p_kPa_e = ne_profile_for_far3d * Te_profile_for_far3d * kev_to_J / 1000
+
+    #     # Total Pressures 
+    #     thermal_pressure = p_kPa_bulk + p_kPa_e
+    #     equilibrium_pressure = thermal_pressure + p_kPa_NBI + p_kPa_RF
+
+    #     # Load up profiles for export to FAR3D
+    #     self.load_profile(profile_name="rho_e", profile_array=rho_array_for_far3d)
+
+    #     # Bulk Ions / Electrons
+    #     self.load_profile(profile_name="den_ion_e", profile_array=(nbulk_profile_for_far3d / 1e20))
+    #     self.load_profile(profile_name="temp_ion_e", profile_array=Tbulk_profile_for_far3d)
+    #     self.load_profile(profile_name="den_elec_e", profile_array=(ne_profile_for_far3d / 1e20))
+    #     self.load_profile(profile_name="temp_elec_e", profile_array=Te_profile_for_far3d)   
+
+    #     # Fast Species (NBI / RF)
+    #     self.load_profile(profile_name="den_beam_e", profile_array=(nNBI_profile_for_far3d / 1e20))
+    #     self.load_profile(profile_name="temp_beam_e", profile_array=TNBI_profile_for_far3d)   
+    #     self.load_profile(profile_name="den_alpha_e", profile_array=(nRF_profile_for_far3d / 1e20))
+    #     self.load_profile(profile_name="temp_alpha_e", profile_array=TRF_profile_for_far3d)   
+
+    #     # Pressures 
+    #     self.load_profile(profile_name="pres_thermal_e", profile_array=thermal_pressure)
+    #     self.load_profile(profile_name="pres_beam_e", profile_array=p_kPa_NBI)
+    #     self.load_profile(profile_name="pres_equil_e", profile_array=equilibrium_pressure)
+
+    #     # Impurities (Assumed baseline value)
+    #     impurity_density = np.ones_like(rho_array_for_far3d) * 0.01
+    #     self.load_profile(profile_name='den_imp_e', profile_array=impurity_density)
+
+    #     # Process and interpolate the safety factor (q) profile from EQDSK
+    #     q_eqdsk = self.eqdsk['qpsi']
+    #     psi_n = np.linspace(0, 1, self.eqdsk['nW'])
+    #     phi = cumulative_trapezoid(q_eqdsk, psi_n, initial=0)
+    #     phi_n = phi / phi[-1]
+    #     rho_tor = np.sqrt(phi_n)
+    #     q_interp = interp1d(rho_tor, q_eqdsk)
+    #     q_far3d = q_interp(rho_array_for_far3d)
+    #     self.load_profile(profile_name='qprof', profile_array=q_far3d)
+
+    #     # Suppress rotation profiles for FAR3D baseline
+    #     self.load_profile(profile_name='tor_rot_vel_e', profile_array=rho_array_for_far3d * 0.0)
+    #     self.load_profile(profile_name='pol_rot_vel_e', profile_array=rho_array_for_far3d * 0.0)
+
+    #     self.rho_array_for_far3d = rho_array_for_far3d
+
     def build_far3d_outfile(self, 
-                            rho_array_for_far3d, 
+                            rho_array_for_far3d=None, # Made optional for fixed-file mode
                             mode='cql3d', 
                             cql_or_mcgo_pp=None, 
                             E_NBI_kev=80, 
@@ -1635,12 +1755,92 @@ class Far3D_Analysis:
                             mcgo_energy_filter_kev=30, 
                             mcgo_p2f_aorsa_h5_file=None, 
                             s_density=0.05, 
-                            s_temp=0.05):
+                            s_temp=0.05,
+                            fixed_profile_filepath=None):
         """
-        Builds the FAR3D external profiles file using specified input mode data.
-        Supported modes: 'cql3d', 'mcgo', 'mcgo_p2f_aorsa'
+        Builds or loads the FAR3D external profiles file using specified input mode data.
+        Supported modes: 'cql3d', 'mcgo', 'mcgo_p2f_aorsa', 'fixed_file'
         """
-        # --- Step 1: Mode-Specific Interpolator Setup ---
+        kev_to_J = 1.6022e-19 * 1000
+        
+        # --- NEW MODE: Handle Fixed Baseline Files (e.g., SPARC Case) ---
+        if mode == 'fixed_file':
+            if fixed_profile_filepath is None:
+                raise ValueError("fixed_profile_filepath must be provided when mode is 'fixed_file'.")
+            
+            print(f"Reading fixed profiles from: {fixed_profile_filepath}")
+            with open(fixed_profile_filepath, 'r') as f:
+                lines = f.readlines()
+
+            # Find the tabular data start
+            header_idx = None
+            for idx, line in enumerate(lines):
+                if 'rho_e' in line:
+                    header_idx = idx
+                    break
+            if header_idx is None:
+                raise ValueError("Could not find the profile data header line ('rho_e') in the file.")
+
+            # Parse Plasma Geometry Metadata (if needed for beta or tracking)
+            self.geometry_metadata = {}
+            i = 0
+            while i < header_idx:
+                line = lines[i].strip()
+                if not line or line == "PLASMA GEOMETRY" or "TRYING TO GET TO" in line:
+                    i += 1
+                    continue
+                if i + 1 < header_idx:
+                    self.geometry_metadata[line] = lines[i+1].strip()
+                    i += 2
+                else:
+                    i += 1
+
+            # Extract column headers
+            header_line = lines[header_idx].strip()
+            columns = [col.strip() for col in header_line.split(',') if col.strip()]
+
+            # Extract data rows
+            data_rows = []
+            for line in lines[header_idx + 1:]:
+                cleaned_line = line.strip()
+                if cleaned_line:
+                    data_rows.append([float(val) for val in cleaned_line.split()])
+            data_matrix = np.array(data_rows)
+
+            # Map columns to a quick lookup index dictionary
+            col_map = {name: idx for idx, name in enumerate(columns)}
+
+            # Populate class attributes so downstream beta functions don't break
+            if 'rho_e' in col_map:
+                self.rho_array_for_far3d = data_matrix[:, col_map['rho_e']]
+            if 'pres_beam_e' in col_map:
+                self.p_kPa_NBI = data_matrix[:, col_map['pres_beam_e']]
+            
+            # Back-calculate RF pressure if its component pieces exist
+            # if all(k in col_map for k in ['pres_equil_e', 'pres_thermal_e', 'pres_beam_e']):
+            #     p_equil = data_matrix[:, col_map['pres_equil_e']]
+            #     p_therm = data_matrix[:, col_map['pres_thermal_e']]
+            #     p_nbi = data_matrix[:, col_map['pres_beam_e']]
+            n_RF = data_matrix[:, col_map['den_alpha_e']]*1e20
+            T_RF = data_matrix[:, col_map['temp_alpha_e']]
+            self.p_kPa_RF = n_RF * T_RF * kev_to_J / 1000
+
+            # Load every parsed profile column into FAR3D profile engine
+            for col_name, col_idx in col_map.items():
+                self.load_profile(profile_name=col_name, profile_array=data_matrix[:, col_idx])
+
+            # build bulk density interpolator 
+            ion_density = data_matrix[:, col_map['den_ion_e']] * 1e20
+            #print('ion density', ion_density)
+            self.nbulks_interp = interp1d(self.rho_array_for_far3d, ion_density, kind='linear', 
+                                bounds_error=False, 
+                                fill_value=(ion_density[0], ion_density[-1]))
+            
+            print("Profiles successfully loaded into FAR3D memory from fixed file.")
+            return # Early exit! No need to run the analytical processing pipeline below.
+
+
+        # --- Step 1: Mode-Specific Interpolator Setup (Kinetic / H5) ---
         if mode in ['cql3d', 'mcgo']:
             if mode == 'cql3d':
                 rya, vs, F_of_v_indexable_by_rho = self.convert_cql3d_distribution_into_F_of_v_indexable_by_rho(
@@ -1651,7 +1851,6 @@ class Far3D_Analysis:
                     cql_or_mcgo_pp
                 )
 
-            # Build profile interpolators via kinetic distribution fitting
             self.get_energetic_profiles(
                 rho_array_F_of_v_indexable_by_rho=rya, 
                 v_array_F_of_v_indexable_by_rho=vs, 
@@ -1664,7 +1863,6 @@ class Far3D_Analysis:
             )
 
         elif mode == 'mcgo_p2f_aorsa':
-            # Build profile interpolators directly from H5 macro-data
             self.get_energetic_profiles(
                 return_arrays=False,
                 mode='mcgo_p2f_aorsa',
@@ -1673,12 +1871,14 @@ class Far3D_Analysis:
                 s_temp=s_temp
             )
         else:
-            raise ValueError(f"Unknown mode: {mode}. Must be 'cql3d', 'mcgo', or 'mcgo_p2f_aorsa'.")
+            raise ValueError(f"Unknown mode: {mode}. Must be 'cql3d', 'mcgo', 'mcgo_p2f_aorsa', or 'fixed_file'.")
 
-        # --- Step 2: Unified Profile Processing Pipeline (No More Duplication) ---
-        kev_to_J = 1.6022e-19 * 1000
+        # --- Step 2: Unified Profile Processing Pipeline ---
+        if rho_array_for_far3d is None:
+            raise ValueError("rho_array_for_far3d must be provided for generative profile modes.")
+            
+        
 
-        # Evaluate core profiles onto the FAR3D radial grid
         nbulk_profile_for_far3d = self.nbulks_interp(rho_array_for_far3d)
         Tbulk_profile_for_far3d = self.Tbulks_interp(rho_array_for_far3d)
         p_kPa_bulk = nbulk_profile_for_far3d * Tbulk_profile_for_far3d * kev_to_J / 1000
@@ -1693,40 +1893,31 @@ class Far3D_Analysis:
         p_kPa_RF = nRF_profile_for_far3d * TRF_profile_for_far3d * kev_to_J / 1000
         self.p_kPa_RF = p_kPa_RF
 
-        # Electrons
         ne_profile_for_far3d = self.ne_interpolator_m3(rho_array_for_far3d)
         Te_profile_for_far3d = self.Te_interpolator_kev(rho_array_for_far3d)
         p_kPa_e = ne_profile_for_far3d * Te_profile_for_far3d * kev_to_J / 1000
 
-        # Total Pressures 
         thermal_pressure = p_kPa_bulk + p_kPa_e
         equilibrium_pressure = thermal_pressure + p_kPa_NBI + p_kPa_RF
 
-        # Load up profiles for export to FAR3D
         self.load_profile(profile_name="rho_e", profile_array=rho_array_for_far3d)
-
-        # Bulk Ions / Electrons
         self.load_profile(profile_name="den_ion_e", profile_array=(nbulk_profile_for_far3d / 1e20))
         self.load_profile(profile_name="temp_ion_e", profile_array=Tbulk_profile_for_far3d)
         self.load_profile(profile_name="den_elec_e", profile_array=(ne_profile_for_far3d / 1e20))
         self.load_profile(profile_name="temp_elec_e", profile_array=Te_profile_for_far3d)   
 
-        # Fast Species (NBI / RF)
         self.load_profile(profile_name="den_beam_e", profile_array=(nNBI_profile_for_far3d / 1e20))
         self.load_profile(profile_name="temp_beam_e", profile_array=TNBI_profile_for_far3d)   
         self.load_profile(profile_name="den_alpha_e", profile_array=(nRF_profile_for_far3d / 1e20))
         self.load_profile(profile_name="temp_alpha_e", profile_array=TRF_profile_for_far3d)   
 
-        # Pressures 
         self.load_profile(profile_name="pres_thermal_e", profile_array=thermal_pressure)
         self.load_profile(profile_name="pres_beam_e", profile_array=p_kPa_NBI)
         self.load_profile(profile_name="pres_equil_e", profile_array=equilibrium_pressure)
 
-        # Impurities (Assumed baseline value)
         impurity_density = np.ones_like(rho_array_for_far3d) * 0.01
         self.load_profile(profile_name='den_imp_e', profile_array=impurity_density)
 
-        # Process and interpolate the safety factor (q) profile from EQDSK
         q_eqdsk = self.eqdsk['qpsi']
         psi_n = np.linspace(0, 1, self.eqdsk['nW'])
         phi = cumulative_trapezoid(q_eqdsk, psi_n, initial=0)
@@ -1736,7 +1927,6 @@ class Far3D_Analysis:
         q_far3d = q_interp(rho_array_for_far3d)
         self.load_profile(profile_name='qprof', profile_array=q_far3d)
 
-        # Suppress rotation profiles for FAR3D baseline
         self.load_profile(profile_name='tor_rot_vel_e', profile_array=rho_array_for_far3d * 0.0)
         self.load_profile(profile_name='pol_rot_vel_e', profile_array=rho_array_for_far3d * 0.0)
 
@@ -1808,7 +1998,7 @@ class Far3D_Analysis:
             plt.tight_layout()
             plt.show()
 
-    def calculate_normalized_cyclotron_freq(self):
+    def calculate_normalized_cyclotron_freq(self, species):
         """
         Calculates the dimensionless cyclotron frequency (omcy) for FAR3d.
         
@@ -1819,12 +2009,12 @@ class Far3D_Analysis:
         bulk_ion_amu: Mass of the bulk ions in AMU
         """
         # read eqdsk 
-        B0 = self.eqdsk['bcentr']
+        B0 = np.abs(self.eqdsk['bcentr'])
         R0 = self.eqdsk['rcentr']
         n_i0 = self.nbulks_interp(self.rho_array_for_far3d[0])
 
         # Physics constants
-        q_e = 1.602e-19       # Coulombs
+        q_e = self.species_dict[species]['charge']    # Coulombs
         mu_0 = 4 * np.pi * 1e-7 # Vacuum permeability
         
         # 1. Alfvén velocity
@@ -1835,32 +2025,36 @@ class Far3D_Analysis:
         omega_A0 = v_A0 / R0                            # rad/s
         
         # 3. Fast particle cyclotron frequency
-        m_fast_kg = self.species_dict[self.species]['mass']
+        m_fast_kg = self.species_dict[species]['mass']
         omega_c = (q_e * B0) / m_fast_kg                # rad/s
         
         # 4. Dimensionless FAR3d input
         omcy = omega_c / omega_A0
         
-        print(f"Calculated v_A0: {v_A0:.2e} m/s")
-        print(f"Calculated FAR3d omcy: {omcy:.2f}")
+        #print(f"Calculated v_A0: {v_A0:.2e} m/s")
+        #print(f"Calculated FAR3d omcy: {omcy:.2f}")
         
         return omcy
     
-    def calculate_normalized_larmor_radius(self, temperature_header_name):
+    def calculate_normalized_larmor_radius(self, species, temperature_header_name):
         temp_kev = self.case_txt_dict[temperature_header_name][0]
         # conver to jouls
         temp_jouls = temp_kev * 1.6022e-19 * 1000
         minor_radius = (max(self.eqdsk['rbbbs']) - min(self.eqdsk['rbbbs'])) / 2
-        mass_kg = self.species_dict[self.species]['mass']
+        mass_kg = self.species_dict[species]['mass']
 
         velocity = np.sqrt(temp_jouls*2/mass_kg)
-        B0 = self.eqdsk['bcentr']
-        rL = mass_kg * velocity / (B0 * self.species_dict[self.species]['charge']) 
+        B0 = np.abs(self.eqdsk['bcentr'])
+        rL = mass_kg * velocity / (B0 * self.species_dict[species]['charge']) 
+
+        if rL < 1e-6:
+            rL = 0.0001 # floor 
         return  rL / minor_radius
     
     def calculate_betas(self):
         p_NBI_core = self.p_kPa_NBI[0] * 1000
         p_RF_core = self.p_kPa_RF[0] * 1000
+        print('p_RF_core:', p_RF_core)
         mu_0 = 4 * np.pi * 1e-7 # Vacuum permeability
         magnetic_pressure_core = self.eqdsk['bcentr']**2 / (2*mu_0)
 
@@ -1874,7 +2068,8 @@ class Far3D_Analysis:
                                 m_dynamic=[11, 10, 9, 8, 7],
                                 n_dynamic=[10, -10],
                                 leqdim=23,
-                                include_alphas=True):
+                                include_alphas=True,
+                                alpha_beta_amplifier=1):
             """
             Generates the main FAR3d parameters input file using the updated deck structure.
             Automatically formats Python lists for m and n modes into the 
@@ -1892,13 +2087,13 @@ class Far3D_Analysis:
             nn_parts = []
 
             # calculate cyclotron frequencies 
-            omcy = self.calculate_normalized_cyclotron_freq()
-            omcyalp = omcy # these are the same species 
+            omcy = self.calculate_normalized_cyclotron_freq(species=self.species)
+            omcyalp = self.calculate_normalized_cyclotron_freq(species=self.fast_species) 
 
             # calculate larmor radii
-            iflr = self.calculate_normalized_larmor_radius(temperature_header_name='temp_ion_e')
-            r_epflr = self.calculate_normalized_larmor_radius(temperature_header_name='temp_beam_e')
-            r_epflralp = self.calculate_normalized_larmor_radius(temperature_header_name='temp_alpha_e')
+            iflr = self.calculate_normalized_larmor_radius(species=self.species, temperature_header_name='temp_ion_e')
+            r_epflr = self.calculate_normalized_larmor_radius(species=self.fast_species, temperature_header_name='temp_beam_e')
+            r_epflralp = self.calculate_normalized_larmor_radius(species=self.fast_species, temperature_header_name='temp_alpha_e')
 
             # calculate the core betas
             betaNBI, betaRF = self.calculate_betas()
@@ -1935,237 +2130,237 @@ class Far3D_Analysis:
             
             # --- TEMPLATE INJECTION ---
             template = f"""============================/ MAIM NPUT VARIABLES \===================================
-    !!!!!!!!!!! nstres: if 0 new run, if 1 the run is a continuation
-    0
-    !!!!!!!!!!! numrun: run number
-    0000
-    !!!!!!!!!!! numruno: name of the previous run output
-    0000z
-    !!!!!!!!!!! numvac: run number index
-    41503
-    !!!!!!!!!!! nonlin: linear run if 0, non linear run if 1 (no available yet) 
-    0
-    !!!!!!!!!!! ngeneq: equilibrium input (only VMEC available now) 
-    1
-    !!!!!!!!!!! eq_name: equilibrium name 
-    {eq_name}
-    !!!!!!!!!!! maxstp: simulation time steps 
-    1000
-    !!!!!!!!!!! dt0: simulation time step 
-    2
-    !!!!!!!!!!! ldim: total number of poloidal modes (equilibrium + dynamic) 
-    {ldim}
-    !!!!!!!!!!! leqdim: equilibrium poloidal modes 
-    {leqdim}
-    !!!!!!!!!!! jdim: number of radial points
-    1000
-    !!!!!!!!!!! ext_prof: include external profiles if 1
-    1
-    !!!!!!!!!!! ext_prof_name: external profile file name
-    {ext_prof_name}
-    !!!!!!!!!!! ext_prof_len: number of lines in the external profile
-    {ext_prof_len}
-    !!!!!!!!!!! iflr_on: activate thermal ion FLR damping effects if 1
-    1
-    !!!!!!!!!!! epflr_on: activate fast particle FLR damping effects if 1
-    1
-    !!!!!!!!!!! ieldamp_on: activate electron-ion Landau damping effect if 1
-    0
-    !!!!!!!!!!! twofl_on: activate two fluid effects if 1
-    0
-    !!!!!!!!!!! alpha_on: activate a 2nd fast particle species if 1
-    {alphas_RF_included}
-    !!!!!!!!!!! Trapped_on: activate correction for trapped 1st fast particle species if 1
-    1
-    !!!!!!!!!!! B_par_on: activate parallel magnetic field perturbation
-    0
-    !!!!!!!!!!! matrix_out: activate eigensolver output
-    .false. 
-    !!!!!!!!!!! m0dy: equilibrium modes as dynamic
-    0
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    ==================================/ MODEL PARAMETERS \===================================
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!! MODES INCLUDED IN THE MODEL !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! mm: poloidal dynamic and equilibrium modes                                                                               
-    {mm_str}                                                                                                   
-    !!!!!!!!!!! nn: toroidal dynamic and equilibrium modes
-    {nn_str}
-    !!!!!!!!!!! mmeq: poloidal equilibrium modes
-    {mmeq_str}                                                                                                    
-    !!!!!!!!!!! nneq: toroidal equilibrium modes
-    {nneq_str}
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PERTURBATION !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! ipert: different options to drive a perturbation in the equilibria
-    1
-    !!!!!!!!!!! widthi: size of the perturbation
-    1.e-140
-    !!!!!!!!!!! Auto_grid_on: auto grid spacing option
-    1
-    !!!!!!!!!!! ni: number of points interior to the island (if Auto_grid_on = 0)
-    499
-    !!!!!!!!!!! nis: number of points in the island (if Auto_grid_on = 0)
-    251
-    !!!!!!!!!!! ne: number of points exterior to the island (if Auto_grid_on = 0)
-    250
-    !!!!!!!!!!! delta: normalized width of the uniform fine grid (island)
-    0.1
-    !!!!!!!!!!! rc: center of the fine grid (island) along the normalized minor radius
-    0.625
-    !!!!!!!!!!! Edge_on: activates the VMEC data extrapolation
-    1
-    !!!!!!!!!!! edge_p: grid point from where the VMEC data is extrapolated
-    990
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PLASMA PARAMETERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! gamma: adiabatic index
-    0
-    !!!!!!!!!!! s: magnetic Lundquist number
-    5.e6
-    !!!!!!!!!!! betath_factor: thermal beta factor
-    1
-    !!!!!!!!!!! ietaeq: resistivity profile type (if 1 the electron temperature is used)
-    1
-    !!!!!!!!!!! spe1: species first EP population
-    2
-    !!!!!!!!!!! bet0_f: fast particle beta
-    {betaNBI:.3f}
-    !!!!!!!!!!! spe2: species second EP population
-    4
-    !!!!!!!!!!! bet0_falp: 2nd species fast particle beta
-    {betaRF:.3f}
-    !!!!!!!!!!! omcy: normalized fast particle cyclotron frequency
-    {omcy}
-    !!!!!!!!!!! omcyb: normalized helicaly trapped fast particle frequency
-    0.165
-    !!!!!!!!!!! rbound: normalized helicaly trapped bound length
-    0.7
-    !!!!!!!!!!! omcyalp: normalized 2nd species fast particle cyclotron frequency
-    {omcyalp}
-    !!!!!!!!!!! itime: time normalization option
-    2
-    !!!!!!!!!!! dpres: electron pressure normalized to the total pressure (two fluid effects)
-    0.35
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DIFFUSIVITIES !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! stdifp: thermal pressure eq. diffusivity
-    0
-    !!!!!!!!!!! stdifu: vorticity eq. diffusivity
-    0
-    !!!!!!!!!!! stdifv: thermal particle parallel velocity eq. diffusivity
-    0
-    !!!!!!!!!!! stdifnf: fast particle density eq. diffusivity
-    0
-    !!!!!!!!!!! stdifvf: fast particle parallel velocity eq. diffusivity
-    0
-    !!!!!!!!!!! stdifnfalp: fast particle density eq. diffusivity
-    0
-    !!!!!!!!!!! stdifvfalp: fast particle parallel velocity eq. diffusivity
-    0
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! LANDAU CLOSURE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! LcA0: Landau closure 1
-    2.718
-    !!!!!!!!!!! LcA1: Landau closure 2
-    -1.311
-    !!!!!!!!!!! LcA2: correction to the fast particle beta
-    0.889
-    !!!!!!!!!!! LcA3: correction to the ratio between fast particle thermal velocity and Alfven velocity
-    1.077
-    !!!!!!!!!!! LcA0alp: Landau closure 1 2nd species
-    2.718
-    !!!!!!!!!!! LcA1alp: Landau closure 2 2nd species
-    -1.311
-    !!!!!!!!!!! LcA2alp: correction to the 2nd species fast particle beta
-    0.889
-    !!!!!!!!!!! LcA3alp: correction to the ratio between fast particle thermal velocity and Alfven velocity 2nd species
-    1.077
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DAMPINGS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! omegar: eigenmode frequency without damping effects
-    0.7
-    !!!!!!!!!!! iflr: thermal ions larmor radius normalized to the minor radius
-    {iflr}
-    !!!!!!!!!!! r_epflr: energetic particle larmor radius normalized to the minor radius
-    {r_epflr}
-    !!!!!!!!!!! r_epflralp: 2nd species energetic particle larmor radius normalized to the minor radius
-    {r_epflralp}
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! OUTPUT !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! lplots: number of eigenfunction modes in the output files
-    {lplots}
-    !!!!!!!!!!! nprint: number of step for an output in farprt file
-    100
-    !!!!!!!!!!! ndump: number of step for an output 
-    1000
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! OTHER PARAMETERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !!!!!!!!!!! DIIID_u: turn on to use the same units than TRANSP output in the external profiles (cm not m)
-    0
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    ================================/ SELF PROFILES PARAMETERS \============================
-    !!!!!!!!!!! EP_dens_on: user defined fast particle density profile (if 1)
-    1
-    !!!!!!!!!!! Adens: fast particle density profile flatness
-    8.5
-    !!!!!!!!!!! Bdens: location of the fast particle density profile gradient
-    0.4
-    !!!!!!!!!!! Alpha_dens_on: user defined 2nd species fast particle density profile (if 1)
-    1
-    !!!!!!!!!!! Adensalp: 2nd species fast particle density profile flatness
-    7
-    !!!!!!!!!!! Bdensalp: location of the 2nd species fast particle density profile gradient
-    0.4
-    !!!!!!!!!!! EP_vel_on: user defined fast particle vth/vA0 profile (if 1)
-    1
-    !!!!!!!!!!! Alpha_vel_on: user defined 2nd species fast particle vth/vA0 profile (if 1)
-    1
-    !!!!!!!!!!! q_prof_on: the safety factor profile of the external profile is used (if 1)
-    0
-    !!!!!!!!!!! Eq_vel_on: the equilibrium toroidal velocity profile of the external profile is used (if 1)
-    0
-    !!!!!!!!!!! Eq_velp_on: the equilibrium poloidal velocity profile of the external profile is used (if 1)
-    0
-    !!!!!!!!!!! Eq_Presseq_on: the equilibrium pressure profile of the external profile is used (if 1)
-    0
-    !!!!!!!!!!! Eq_Presstot_on: the equilibrium and EP pressure profiles of the external profile is used (if 1)
-    1
-    !!!!!!!!!!! deltaq: safety factor displacement (only tokamak eq.)
-    0
-    !!!!!!!!!!! deltaiota: iota displacement (only stellarator eq.)
-    0
-    !!!!!!!!!!! etascl: user defined constant resistivity (if ietaeq=2)
-    1
-    !!!!!!!!!!! eta0: user defined resistivity profile (if ietaeq=3)
-    1
-    !!!!!!!!!!! reta: user defined resistivity profile (if ietaeq=3)
-    0.5
-    !!!!!!!!!!! etalmb: user defined resistivity profile (if ietaeq=3)
-    0.5
-    !!!!!!!!!!! cnep: user defined thermal plasma density profile 
-    5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,                                                      
-    -9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,                                                      
-    3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,                                                       
-    -1.160818784526462E+03,  2.100700986027593E+02        
-    !!!!!!!!!!! ctep: user defined thermal electron plasma temperature profile
-    2.466297479423131E+00, -3.123519794977899E+00,  1.455166487731591E+01,
-    -8.288042333625850E+01,  3.310397776819081E+02, -9.891030935273041E+02,
-    2.133646774676442E+03, -3.082790956275732E+03,  2.757324727437074E+03,
-    -1.367187266111290E+03,  2.864529219889411E+02
-    !!!!!!!!!!! cnfp: user defined energetic particles density profile
-    1.5, 0.1, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    !!!!!!!!!!! cvep: user defined thermal ions parallel velocity profile (only for thermal ion FLR effects)
-    5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,
-    -9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,
-    3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,
-    -1.160818784526462E+03,  2.100700986027593E+02
-    !!!!!!!!!!! cvfp: user defined energetic particles parallel velocity profile
-    0.68, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    !!!!!!!!!!! cnfpalp: user defined 2nd species energetic particles density profile
-    5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,
-    -9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,
-    3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,
-    -1.160818784526462E+03,  2.100700986027593E+02
-    !!!!!!!!!!! cvfpalp: user defined 2nd species energetic particles parallel velocity profile
-    0.48, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    !!!!!!!!!!! eqvt: user defined equilibrium thermal toroidal velocity profile
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    !!!!!!!!!!! eqvp: user defined equilibrium thermal poloidal velocity profile
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"""
+!!!!!!!!!!! nstres: if 0 new run, if 1 the run is a continuation
+0
+!!!!!!!!!!! numrun: run number
+0000
+!!!!!!!!!!! numruno: name of the previous run output
+0000z
+!!!!!!!!!!! numvac: run number index
+41503
+!!!!!!!!!!! nonlin: linear run if 0, non linear run if 1 (no available yet) 
+0
+!!!!!!!!!!! ngeneq: equilibrium input (only VMEC available now) 
+1
+!!!!!!!!!!! eq_name: equilibrium name 
+{eq_name}
+!!!!!!!!!!! maxstp: simulation time steps 
+1000
+!!!!!!!!!!! dt0: simulation time step 
+2
+!!!!!!!!!!! ldim: total number of poloidal modes (equilibrium + dynamic) 
+{ldim}
+!!!!!!!!!!! leqdim: equilibrium poloidal modes 
+{leqdim}
+!!!!!!!!!!! jdim: number of radial points
+1000
+!!!!!!!!!!! ext_prof: include external profiles if 1
+1
+!!!!!!!!!!! ext_prof_name: external profile file name
+{ext_prof_name}
+!!!!!!!!!!! ext_prof_len: number of lines in the external profile
+{ext_prof_len}
+!!!!!!!!!!! iflr_on: activate thermal ion FLR damping effects if 1
+0
+!!!!!!!!!!! epflr_on: activate fast particle FLR damping effects if 1
+0
+!!!!!!!!!!! ieldamp_on: activate electron-ion Landau damping effect if 1
+1
+!!!!!!!!!!! twofl_on: activate two fluid effects if 1
+0
+!!!!!!!!!!! alpha_on: activate a 2nd fast particle species if 1
+{alphas_RF_included}
+!!!!!!!!!!! Trapped_on: activate correction for trapped 1st fast particle species if 1
+1
+!!!!!!!!!!! B_par_on: activate parallel magnetic field perturbation
+0
+!!!!!!!!!!! matrix_out: activate eigensolver output
+.false. 
+!!!!!!!!!!! m0dy: equilibrium modes as dynamic
+0
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+==================================/ MODEL PARAMETERS \===================================
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!! MODES INCLUDED IN THE MODEL !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! mm: poloidal dynamic and equilibrium modes                                                                               
+{mm_str}                                                                                                   
+!!!!!!!!!!! nn: toroidal dynamic and equilibrium modes
+{nn_str}
+!!!!!!!!!!! mmeq: poloidal equilibrium modes
+{mmeq_str}                                                                                                    
+!!!!!!!!!!! nneq: toroidal equilibrium modes
+{nneq_str}
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PERTURBATION !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! ipert: different options to drive a perturbation in the equilibria
+1
+!!!!!!!!!!! widthi: size of the perturbation
+1.e-140
+!!!!!!!!!!! Auto_grid_on: auto grid spacing option
+1
+!!!!!!!!!!! ni: number of points interior to the island (if Auto_grid_on = 0)
+499
+!!!!!!!!!!! nis: number of points in the island (if Auto_grid_on = 0)
+251
+!!!!!!!!!!! ne: number of points exterior to the island (if Auto_grid_on = 0)
+250
+!!!!!!!!!!! delta: normalized width of the uniform fine grid (island)
+0.1
+!!!!!!!!!!! rc: center of the fine grid (island) along the normalized minor radius
+0.625
+!!!!!!!!!!! Edge_on: activates the VMEC data extrapolation
+1
+!!!!!!!!!!! edge_p: grid point from where the VMEC data is extrapolated
+990
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PLASMA PARAMETERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! gamma: adiabatic index
+0
+!!!!!!!!!!! s: magnetic Lundquist number
+5.e6
+!!!!!!!!!!! betath_factor: thermal beta factor
+1
+!!!!!!!!!!! ietaeq: resistivity profile type (if 1 the electron temperature is used)
+1
+!!!!!!!!!!! spe1: species first EP population
+2
+!!!!!!!!!!! bet0_f: fast particle beta
+{betaNBI:.4f}
+!!!!!!!!!!! spe2: species second EP population
+4
+!!!!!!!!!!! bet0_falp: 2nd species fast particle beta
+{alpha_beta_amplifier*betaRF:.4f}
+!!!!!!!!!!! omcy: normalized fast particle cyclotron frequency
+{omcy}
+!!!!!!!!!!! omcyb: normalized helicaly trapped fast particle frequency
+0.165
+!!!!!!!!!!! rbound: normalized helicaly trapped bound length
+0.7
+!!!!!!!!!!! omcyalp: normalized 2nd species fast particle cyclotron frequency
+{omcyalp}
+!!!!!!!!!!! itime: time normalization option
+2
+!!!!!!!!!!! dpres: electron pressure normalized to the total pressure (two fluid effects)
+0.35
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DIFFUSIVITIES !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! stdifp: thermal pressure eq. diffusivity
+0
+!!!!!!!!!!! stdifu: vorticity eq. diffusivity
+0
+!!!!!!!!!!! stdifv: thermal particle parallel velocity eq. diffusivity
+0
+!!!!!!!!!!! stdifnf: fast particle density eq. diffusivity
+0
+!!!!!!!!!!! stdifvf: fast particle parallel velocity eq. diffusivity
+0
+!!!!!!!!!!! stdifnfalp: fast particle density eq. diffusivity
+0
+!!!!!!!!!!! stdifvfalp: fast particle parallel velocity eq. diffusivity
+0
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! LANDAU CLOSURE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! LcA0: Landau closure 1
+2.718
+!!!!!!!!!!! LcA1: Landau closure 2
+-1.311
+!!!!!!!!!!! LcA2: correction to the fast particle beta
+0.889
+!!!!!!!!!!! LcA3: correction to the ratio between fast particle thermal velocity and Alfven velocity
+1.077
+!!!!!!!!!!! LcA0alp: Landau closure 1 2nd species
+2.718
+!!!!!!!!!!! LcA1alp: Landau closure 2 2nd species
+-1.311
+!!!!!!!!!!! LcA2alp: correction to the 2nd species fast particle beta
+0.889
+!!!!!!!!!!! LcA3alp: correction to the ratio between fast particle thermal velocity and Alfven velocity 2nd species
+1.077
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DAMPINGS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! omegar: eigenmode frequency without damping effects
+0.7
+!!!!!!!!!!! iflr: thermal ions larmor radius normalized to the minor radius
+{iflr}
+!!!!!!!!!!! r_epflr: energetic particle larmor radius normalized to the minor radius
+{r_epflr}
+!!!!!!!!!!! r_epflralp: 2nd species energetic particle larmor radius normalized to the minor radius
+{r_epflralp}
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! OUTPUT !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! lplots: number of eigenfunction modes in the output files
+{lplots}
+!!!!!!!!!!! nprint: number of step for an output in farprt file
+100
+!!!!!!!!!!! ndump: number of step for an output 
+1000
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! OTHER PARAMETERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! DIIID_u: turn on to use the same units than TRANSP output in the external profiles (cm not m)
+0
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+================================/ SELF PROFILES PARAMETERS \============================
+!!!!!!!!!!! EP_dens_on: user defined fast particle density profile (if 1)
+1
+!!!!!!!!!!! Adens: fast particle density profile flatness
+8.5
+!!!!!!!!!!! Bdens: location of the fast particle density profile gradient
+0.4
+!!!!!!!!!!! Alpha_dens_on: user defined 2nd species fast particle density profile (if 1)
+1
+!!!!!!!!!!! Adensalp: 2nd species fast particle density profile flatness
+7
+!!!!!!!!!!! Bdensalp: location of the 2nd species fast particle density profile gradient
+0.4
+!!!!!!!!!!! EP_vel_on: user defined fast particle vth/vA0 profile (if 1)
+1
+!!!!!!!!!!! Alpha_vel_on: user defined 2nd species fast particle vth/vA0 profile (if 1)
+1
+!!!!!!!!!!! q_prof_on: the safety factor profile of the external profile is used (if 1)
+0
+!!!!!!!!!!! Eq_vel_on: the equilibrium toroidal velocity profile of the external profile is used (if 1)
+0
+!!!!!!!!!!! Eq_velp_on: the equilibrium poloidal velocity profile of the external profile is used (if 1)
+0
+!!!!!!!!!!! Eq_Presseq_on: the equilibrium pressure profile of the external profile is used (if 1)
+0
+!!!!!!!!!!! Eq_Presstot_on: the equilibrium and EP pressure profiles of the external profile is used (if 1)
+1
+!!!!!!!!!!! deltaq: safety factor displacement (only tokamak eq.)
+0
+!!!!!!!!!!! deltaiota: iota displacement (only stellarator eq.)
+0
+!!!!!!!!!!! etascl: user defined constant resistivity (if ietaeq=2)
+1
+!!!!!!!!!!! eta0: user defined resistivity profile (if ietaeq=3)
+1
+!!!!!!!!!!! reta: user defined resistivity profile (if ietaeq=3)
+0.5
+!!!!!!!!!!! etalmb: user defined resistivity profile (if ietaeq=3)
+0.5
+!!!!!!!!!!! cnep: user defined thermal plasma density profile 
+5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,                                                      
+-9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,                                                      
+3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,                                                       
+-1.160818784526462E+03,  2.100700986027593E+02        
+!!!!!!!!!!! ctep: user defined thermal electron plasma temperature profile
+2.466297479423131E+00, -3.123519794977899E+00,  1.455166487731591E+01,
+-8.288042333625850E+01,  3.310397776819081E+02, -9.891030935273041E+02,
+2.133646774676442E+03, -3.082790956275732E+03,  2.757324727437074E+03,
+-1.367187266111290E+03,  2.864529219889411E+02
+!!!!!!!!!!! cnfp: user defined energetic particles density profile
+1.5, 0.1, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! cvep: user defined thermal ions parallel velocity profile (only for thermal ion FLR effects)
+5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,
+-9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,
+3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,
+-1.160818784526462E+03,  2.100700986027593E+02
+!!!!!!!!!!! cvfp: user defined energetic particles parallel velocity profile
+0.68, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! cnfpalp: user defined 2nd species energetic particles density profile
+5.349622177242649E-01, -8.158145079082755E-01,  9.051313827341806E+00,
+-9.908622794510921E+01,  5.436130071633405E+02, -1.683588662473988E+03,
+3.184577674238863E+03, -3.789454655055126E+03,  2.786069409436922E+03,
+-1.160818784526462E+03,  2.100700986027593E+02
+!!!!!!!!!!! cvfpalp: user defined 2nd species energetic particles parallel velocity profile
+0.48, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! eqvt: user defined equilibrium thermal toroidal velocity profile
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!! eqvp: user defined equilibrium thermal poloidal velocity profile
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"""
 
             with open(filename, 'w') as f:
                 f.write(template)
@@ -2725,7 +2920,8 @@ class Far3D_Analysis:
                                     ylims=(0,1),
                                     rotate=False,
                                     wave_part='real',
-                                    scale_eigenmode=0.25):
+                                    scale_eigenmode=0.25,
+                                    ):
         # grab the profile data 
         data_dict = self.data_dict[profile_type]
         rgrid = data_dict['r']
@@ -2745,15 +2941,16 @@ class Far3D_Analysis:
         # ---------------------------------     
 
         # now, grab the continuum plot  
+
         fig, ax = self.plot_alfven_continuum(run_dir=matrix_run_dir, 
-                              load_mode_dict=load_mode_dict, 
-                              color_points=False, 
-                              return_fig=True, 
-                              fig_size=fig_size, 
-                              plot_acoustic=False, 
-                              xlims=xlims, 
-                              ylims=ylims,
-                              legend=False) 
+                            load_mode_dict=load_mode_dict, 
+                            color_points=False, 
+                            return_fig=True, 
+                            fig_size=fig_size, 
+                            plot_acoustic=False, 
+                            xlims=xlims, 
+                            ylims=ylims,
+                            legend=False)
         
         with open(profile_run_dir+'conversion_factor.txt', 'r') as f:
             freq_to_kHz = float(f.read().strip())
@@ -2792,6 +2989,106 @@ class Far3D_Analysis:
         ax.axhline(y=fkHz, color='black', linestyle='--')
         ax.legend()
 
+
+    def plot_profile(self, 
+                            ax,
+                            profile_type,
+                            case_dir,
+                            rotate=False,
+                            wave_part='real',
+                            font_size=16,
+                            legend_font_size=10,
+                            cmap='viridis',
+                            gamma_factor=1):
+        # grab the profile data 
+        data_dict = self.data_dict[profile_type]
+        rgrid = data_dict['r']
+        data = data_dict['data']
+        ns = data_dict['ns']
+        ms = data_dict['ms']
+        
+        # --- NEW GLOBAL ROTATION LOGIC ---
+        if rotate:
+            # 1. Find the 2D index of the absolute largest value across ALL modes
+            # np.argmax on a 2D array flattens it, so we unravel it back to (row, col)
+            max_idx = np.unravel_index(np.argmax(np.abs(data)), data.shape)
+            
+            # 2. Extract the phase of that single dominant point
+            global_peak_phase = np.angle(data[max_idx])
+            global_peak_amplitude = np.abs(data[max_idx])
+        # ---------------------------------     
+
+        # now, grab the continuum plot  
+        
+        with open(case_dir+'conversion_factor.txt', 'r') as f:
+            freq_to_kHz = float(f.read().strip())
+        print(f'Found conversion to kHz: {freq_to_kHz}')
+
+        # get the fastest growing mode 
+        gamma, omega_r = self.find_maximum_growth_rate_and_frequency(directory=case_dir)
+        
+        # fkHz = freq_to_kHz * omega_r # fastest growing mode frequency 
+        cmap = plt.get_cmap(cmap)
+        mode_colors = cmap(np.linspace(0, 1, len(ns)))
+        ax.set_title(r'$\omega_r$= '+ f'{float(omega_r):.2f}' + r' $[\tau_A^{-1}]$,' + ' ' + r'$\gamma^*$= '+ f'{float(gamma*gamma_factor):.4f}' + r' $[\tau_A^{-1}]$', fontsize=font_size)
+        
+        for imode in range(len(ns)):
+            n = ns[imode]
+            m = ms[imode]
+            profile = data[:,imode]
+
+            # now, rotate the wave using the SAME angle for every mode
+            if rotate:
+                profile = profile * np.exp(-1j * global_peak_phase)
+
+            if wave_part == 'real':
+                profile = np.real(profile)
+            elif wave_part == 'imaginary':
+                profile = np.imag(profile)
+            elif wave_part == 'mag':
+                profile = np.abs(profile)
+            else:
+                raise ValueError('Wave plotting type wave_part not understood') 
+            label = f'm/n: {m}/{n}'
+
+            # shift the profile to the frequency, scale  
+            # profile = (profile/global_peak_amplitude)*scale_eigenmode*(ylims[1]-ylims[0]) + fkHz
+            line_color = mode_colors[imode]
+            ax.plot(rgrid, profile, label=label, color=line_color) 
+
+        # ax.axhline(y=fkHz, color='black', linestyle='--')
+        ax.legend(fontsize=legend_font_size)
+        return ax
+
+    def get_q_profile(self, eqdsk_path):
+        with open(eqdsk_path, 'r') as f:
+            eqdsk_dict = geqdsk.read(f)
+        nx = eqdsk_dict['nx']
+        qpsi = eqdsk_dict['qpsi']
+
+        # 1. Create the normalized poloidal flux grid (0 to 1)
+        # EQDSK 1D profiles are spaced uniformly in unnormalized poloidal flux.
+        psi_norm = np.linspace(0, 1, nx)
+
+        # 2. Calculate rho_pol
+        rho_pol = np.sqrt(psi_norm)
+        dq_drho = np.gradient(qpsi, rho_pol)
+        return rho_pol, qpsi, dq_drho
+
+    def get_applicable_m_numbers(self, n, eqdsk_path, maximum_rho, minimum_rho=0):
+        rho_pol, qpsi, dq_drho = self.get_q_profile(eqdsk_path=eqdsk_path)
+
+        rho_max_index = np.where(np.abs(rho_pol - maximum_rho) == np.min(np.abs(rho_pol - maximum_rho)))[0][0]
+        rho_min_index = np.where(np.abs(rho_pol - minimum_rho) == np.min(np.abs(rho_pol - minimum_rho)))[0][0]
+
+        q_applicable = qpsi[rho_min_index:(rho_max_index+1)]
+
+        m_applicable = n*q_applicable
+
+        m_min = np.min(m_applicable)
+        m_max = np.max(m_applicable)
+
+        return int(np.floor(m_min)), int(np.ceil(m_max)) 
 
     def save_mode_growth_rate_results(self, run_dir, save_file_path, mode_label='not labeled'):
         gamma, omega_r = self.find_maximum_growth_rate_and_frequency(directory=run_dir)
