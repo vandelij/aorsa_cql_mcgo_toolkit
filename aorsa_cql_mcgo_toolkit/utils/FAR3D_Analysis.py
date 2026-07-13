@@ -19,6 +19,7 @@ import f90nml as f90
 from matplotlib.collections import LineCollection
 from matplotlib.font_manager import FontProperties
 from matplotlib.ticker import FormatStrFormatter, FuncFormatter
+from scipy.interpolate import UnivariateSpline
 import re
 # import John's toolkit area
 import plasma
@@ -343,35 +344,75 @@ class Far3D_Analysis:
 
         fig.suptitle(title_string, fontsize=30, fontweight='bold')
 
-
+    def get_perturbed_RZ(self, R, Z, far3d_output_name, psi_norm_max=0.95, phase=0, rotate=True):
+        psi_norm = self.getpsirzNorm(R, Z).item()
         
-
-    def get_perturbed_RZ(self, R, Z, far3d_output_name, psi_norm_max=0.95, phase=0):
-        psi_norm = self.getpsirzNorm(R,Z).item()
         if psi_norm < psi_norm_max:
-            theta = np.mod(np.arctan2(Z - self.Zcenter, R - self.Rcenter), 2*np.pi)
-            rho = np.sqrt(psi_norm) # TODO confirm its not np.sqrt(psi_norm)
+            # Calculate geometric coordinates
+            theta = np.mod(np.arctan2(Z - self.Zcenter, R - self.Rcenter), 2 * np.pi)
+            rho = np.sqrt(psi_norm) # Yes, rho is typically sqrt(psi_norm) in standard flux coordinates
 
-            # load up the file dict to assess 
             file_dict = self.data_dict[far3d_output_name]
             ms = file_dict['ms']
-            #print(np.where(np.array(ms) > 0))
-            num_pos_ms = np.where(np.array(ms) > 0)[0].shape[0]
-            mode_sum = 0
+            data = file_dict['data']
+            interpolators = file_dict['interpolators']
 
-            for im in range(num_pos_ms):
-                m = ms[im]
-                #print(f'm: {m}')
-                # fr_cos_term = file_dict['interpolators'][im](rho)
-                # fr_sin_term = file_dict['interpolators'][im + num_pos_ms](rho)
-                fr_sin_term = file_dict['interpolators'][im](rho)
-                fr_cos_term = file_dict['interpolators'][im + num_pos_ms](rho)
-                mode_sum += fr_cos_term * np.cos(m*(theta + phase)) \
-                + fr_sin_term * np.sin(m*(theta + phase))
-            return mode_sum
+            # --- 1. Global Phase Unwrapping ---
+            if rotate:
+                # Find the dominant peak to anchor the phase (just like 1D plots)
+                max_idx = np.unravel_index(np.argmax(np.abs(data)), data.shape)
+                global_peak_phase = np.angle(data[max_idx])
+            else:
+                global_peak_phase = 0.0
+
+            # --- 2. Complex Mode Summation ---
+            mode_sum = 0.0 + 0.0j
+            
+            # Since the executable returns complex values, interpolators map 1-to-1 with ms.
+            # We no longer need to split 'num_pos_ms' for separate cos/sin arrays.
+            for im, m in enumerate(ms):
+                # A_m(rho) is now a complex amplitude: X_real + i * X_imag
+                A_m = interpolators[im](rho)
+                
+                # Spatial wave form: A_m * e^(i * m * theta)
+                mode_sum += A_m * np.exp(1j * m * (theta + phase))
+
+            # --- 3. Apply Rotation and Extract Physical Wave ---
+            # Rotate the entire complex sum by the unwrapping phase, then take the Real part
+            physical_perturbation = np.real(mode_sum * np.exp(-1j * global_peak_phase))
+            
+            return physical_perturbation
 
         else:
-            return 0
+            return 0.0
+        
+
+    # def get_perturbed_RZ(self, R, Z, far3d_output_name, psi_norm_max=0.95, phase=0):
+    #     psi_norm = self.getpsirzNorm(R,Z).item()
+    #     if psi_norm < psi_norm_max:
+    #         theta = np.mod(np.arctan2(Z - self.Zcenter, R - self.Rcenter), 2*np.pi)
+    #         rho = np.sqrt(psi_norm) # TODO confirm its not np.sqrt(psi_norm)
+
+    #         # load up the file dict to assess 
+    #         file_dict = self.data_dict[far3d_output_name]
+    #         ms = file_dict['ms']
+    #         #print(np.where(np.array(ms) > 0))
+    #         num_pos_ms = np.where(np.array(ms) > 0)[0].shape[0]
+    #         mode_sum = 0
+
+    #         for im in range(num_pos_ms):
+    #             m = ms[im]
+    #             #print(f'm: {m}')
+    #             # fr_cos_term = file_dict['interpolators'][im](rho)
+    #             # fr_sin_term = file_dict['interpolators'][im + num_pos_ms](rho)
+    #             fr_sin_term = file_dict['interpolators'][im](rho)
+    #             fr_cos_term = file_dict['interpolators'][im + num_pos_ms](rho)
+    #             mode_sum += fr_cos_term * np.cos(m*(theta + phase)) \
+    #             + fr_sin_term * np.sin(m*(theta + phase))
+    #         return mode_sum
+
+    #     else:
+    #         return 0
         
     def get_2d_mode_structure(self, Rarray, Zarray, far3d_output_name, psi_norm_max=0.95, phase=0):
         mode_2d_structure = np.zeros((Rarray.shape[0], Zarray.shape[0]))
@@ -389,7 +430,10 @@ class Far3D_Analysis:
     def plot_2d_mode_structure(self, 
                                Rarray, 
                                Zarray, 
-                               far3d_output_name, 
+                               far3d_output_name,
+                               ax=None, 
+                               n=None,
+                               colorbar_label='Fill me in',
                                use_eqdsk_grids=True,
                                figsize=(10,10), 
                                psi_levels=6, 
@@ -398,15 +442,20 @@ class Far3D_Analysis:
                                phase=0,
                                use_range = False,
                                vmin=-1,
-                               vmax=1):
+                               vmax=1,
+                               ):
         
         if use_eqdsk_grids:
             Rarray = self.eqdsk_with_B_info["rgrid"]
             Zarray = self.eqdsk_with_B_info["zgrid"]
 
-        fig, ax = self.plot_equilibrium(
-            figsize=figsize, levels=psi_levels, fontsize=fontsize, return_plot=True
-        )
+        if ax == None:
+            fig, ax = self.plot_equilibrium(
+                figsize=figsize, levels=psi_levels, fontsize=fontsize, return_plot=True
+            )
+
+        else: 
+            fig = ax.get_figure()
 
         mode_2d_structure = self.get_2d_mode_structure(Rarray=Rarray, 
                                                        Zarray=Zarray, 
@@ -418,9 +467,16 @@ class Far3D_Analysis:
         else:
             abs_max = np.max(np.abs(mode_2d_structure))
             c1 = ax.contourf(Rarray, Zarray, mode_2d_structure.T, levels=300, cmap='seismic', vmin=-abs_max, vmax=abs_max)
-        fig.colorbar(
-            c1, ax=ax, label=f"{far3d_output_name} magnitude"
+        cbar = fig.colorbar(
+            c1, ax=ax
         )
+
+        cbar.set_label(label=f"{colorbar_label} [arb. units]", fontsize=fontsize)
+        cbar.ax.tick_params(labelsize=fontsize)
+        if n != None:
+            ax.set_title(f'n={n}', fontsize=fontsize)
+
+        return ax
 
     def read_far3d_run_txt_file(self, in_txt_file_path):
         """
@@ -626,6 +682,20 @@ class Far3D_Analysis:
 
     def load_ion_temperature_profile(self, rho, Ti):
         self.Ti_interpolator_kev  = interp1d(rho, Ti, kind='linear')
+
+    def load_bulk_interpolators_from_json(self, json_file):
+        with open(json_file, 'r') as file:
+            data_dict = json.load(file)
+
+        rgrid = data_dict["rho"]
+        Te = data_dict["Te [keV]"]
+        TD = data_dict["TD [keV]"]
+        nD = data_dict["nD [m^-3]"]
+        ne = data_dict["ne [m^-3]"]
+        self.load_electron_temperature_profile(rgrid, Te)
+        self.load_ion_temperature_profile(rgrid, TD)
+        self.load_electron_density_profile(rgrid, ne)
+        self.load_bulkion_density_profile(rgrid, nD)
 
     def sum_of_maxwellians(self, v, *params):
         """Computes the sum of N maxwellians over the speed grid v
@@ -1485,6 +1555,47 @@ class Far3D_Analysis:
             
         return master_dict
     
+    def smooth_mc_profile(self, rho_grid, choppy_array, s_multiplier=0.05):
+        """
+        Smooths choppy Monte Carlo radial profiles using a Univariate Spline.
+        Automatically handles NaNs and Infs resulting from zero-density regions.
+        """
+        # 1. Splines require strictly increasing x-arrays. Sort just in case.
+        sort_idx = np.argsort(rho_grid)
+        rho_sorted = rho_grid[sort_idx]
+        array_sorted = choppy_array[sort_idx]
+        
+        # 2. Mask out NaNs and Infs for the fit
+        valid_mask = np.isfinite(array_sorted)
+        rho_fit = rho_sorted[valid_mask]
+        array_fit = array_sorted[valid_mask]
+        
+        # Fallback if the array is entirely NaNs
+        if len(rho_fit) < 4:  # k=3 spline requires at least 4 valid points
+            return np.zeros_like(rho_grid)
+        
+        # 3. Calculate a dynamic smoothing factor 's' on VALID data only. 
+        variance = np.var(array_fit)
+        s_val = len(rho_fit) * variance * s_multiplier
+        
+        # Ensure s_val is strictly >= 0 (in case of a perfectly flat profile where var=0)
+        s_val = max(s_val, 0.0)
+        
+        # 4. Fit a cubic spline (k=3) on the valid data
+        spline = UnivariateSpline(rho_fit, array_fit, k=3, s=s_val)
+        
+        # 5. Evaluate the smoothed spline on the ENTIRE sorted grid 
+        # This naturally interpolates across the gaps where NaNs used to be
+        smoothed_array = spline(rho_sorted)
+        
+        # 6. Physics check: clip negatives
+        smoothed_array = np.clip(smoothed_array, a_min=1e-10, a_max=None)
+        
+        # 7. Revert to original array order
+        unsort_idx = np.argsort(sort_idx)
+        
+        return smoothed_array[unsort_idx]
+
     def get_energetic_profiles(self, 
                                rho_array_F_of_v_indexable_by_rho=None, 
                                v_array_F_of_v_indexable_by_rho=None, 
@@ -1495,6 +1606,7 @@ class Far3D_Analysis:
                                mode='cql3d', 
                                mcgo_energy_filter_kev=30, 
                                mcgo_p2f_aorsa_h5_file=None,
+                               h5_key=None,
                                s_density=0.05,
                                s_temp=0.05):
 
@@ -1532,18 +1644,18 @@ class Far3D_Analysis:
 
             # load up rho grid 
 
-            rho_array = self.mcgo_p2f_aorsa_data_dict['rho_mcgo_lfs']
+            rho_array = self.mcgo_p2f_aorsa_data_dict[h5_key]['rho_mcgo_lfs']
 
             # assign nulk density and temperature profiles 
             nbulks = self.ni_interpolator_m3(rho_array)
             Tbulks = self.Ti_interpolator_kev(rho_array)
 
             # load up the other profiles directly to raw lists, but need to apply smothing to remove noise 
-            nNBIs_raw = self.mcgo_p2f_aorsa_data_dict['NBI density [m^-3]']
-            TNBIs_raw = self.mcgo_p2f_aorsa_data_dict['NBI Temp [keV]']
+            nNBIs_raw = self.mcgo_p2f_aorsa_data_dict[h5_key]['NBI density [m^-3]']
+            TNBIs_raw = self.mcgo_p2f_aorsa_data_dict[h5_key]['NBI Temp [keV]']
 
-            nRFs_raw = self.mcgo_p2f_aorsa_data_dict['RF density [m^-3]']
-            TRFs_raw = self.mcgo_p2f_aorsa_data_dict['RF Temp [keV]']
+            nRFs_raw = self.mcgo_p2f_aorsa_data_dict[h5_key]['RF density [m^-3]']
+            TRFs_raw = self.mcgo_p2f_aorsa_data_dict[h5_key]['RF Temp [keV]']
 
             # apply smoothing so we dont end up with crazy gradients 
             nNBIs = self.smooth_mc_profile(np.array(rho_array), np.array(nNBIs_raw), s_multiplier=s_density)
@@ -1754,9 +1866,11 @@ class Far3D_Analysis:
                             index_to_cut=0, 
                             mcgo_energy_filter_kev=30, 
                             mcgo_p2f_aorsa_h5_file=None, 
+                            h5_key=None,
                             s_density=0.05, 
                             s_temp=0.05,
-                            fixed_profile_filepath=None):
+                            fixed_profile_filepath=None,
+                            qshift=0):
         """
         Builds or loads the FAR3D external profiles file using specified input mode data.
         Supported modes: 'cql3d', 'mcgo', 'mcgo_p2f_aorsa', 'fixed_file'
@@ -1867,6 +1981,7 @@ class Far3D_Analysis:
                 return_arrays=False,
                 mode='mcgo_p2f_aorsa',
                 mcgo_p2f_aorsa_h5_file=mcgo_p2f_aorsa_h5_file,
+                h5_key=h5_key,
                 s_density=s_density,
                 s_temp=s_temp
             )
@@ -1924,7 +2039,7 @@ class Far3D_Analysis:
         phi_n = phi / phi[-1]
         rho_tor = np.sqrt(phi_n)
         q_interp = interp1d(rho_tor, q_eqdsk)
-        q_far3d = q_interp(rho_array_for_far3d)
+        q_far3d = q_interp(rho_array_for_far3d) + qshift
         self.load_profile(profile_name='qprof', profile_array=q_far3d)
 
         self.load_profile(profile_name='tor_rot_vel_e', profile_array=rho_array_for_far3d * 0.0)
@@ -2121,7 +2236,7 @@ class Far3D_Analysis:
 
             # calc the number of profiles per output file 
             lplots = len(m_dynamic) * len(n_dynamic)
-
+            #{betaNBI:.4f} put me back in 
             # include alphas 
             if include_alphas:
                 alphas_RF_included = 1
@@ -2224,7 +2339,7 @@ class Far3D_Analysis:
 !!!!!!!!!!! bet0_f: fast particle beta
 {betaNBI:.4f}
 !!!!!!!!!!! spe2: species second EP population
-4
+2
 !!!!!!!!!!! bet0_falp: 2nd species fast particle beta
 {alpha_beta_amplifier*betaRF:.4f}
 !!!!!!!!!!! omcy: normalized fast particle cyclotron frequency
@@ -2309,7 +2424,7 @@ class Far3D_Analysis:
 !!!!!!!!!!! Alpha_vel_on: user defined 2nd species fast particle vth/vA0 profile (if 1)
 1
 !!!!!!!!!!! q_prof_on: the safety factor profile of the external profile is used (if 1)
-0
+1
 !!!!!!!!!!! Eq_vel_on: the equilibrium toroidal velocity profile of the external profile is used (if 1)
 0
 !!!!!!!!!!! Eq_velp_on: the equilibrium poloidal velocity profile of the external profile is used (if 1)
@@ -3060,11 +3175,11 @@ class Far3D_Analysis:
         ax.legend(fontsize=legend_font_size)
         return ax
 
-    def get_q_profile(self, eqdsk_path):
+    def get_q_profile(self, eqdsk_path, qshift=0):
         with open(eqdsk_path, 'r') as f:
             eqdsk_dict = geqdsk.read(f)
         nx = eqdsk_dict['nx']
-        qpsi = eqdsk_dict['qpsi']
+        qpsi = eqdsk_dict['qpsi'] + qshift
 
         # 1. Create the normalized poloidal flux grid (0 to 1)
         # EQDSK 1D profiles are spaced uniformly in unnormalized poloidal flux.
@@ -3075,8 +3190,8 @@ class Far3D_Analysis:
         dq_drho = np.gradient(qpsi, rho_pol)
         return rho_pol, qpsi, dq_drho
 
-    def get_applicable_m_numbers(self, n, eqdsk_path, maximum_rho, minimum_rho=0):
-        rho_pol, qpsi, dq_drho = self.get_q_profile(eqdsk_path=eqdsk_path)
+    def get_applicable_m_numbers(self, n, eqdsk_path, maximum_rho, minimum_rho=0, qshift=0):
+        rho_pol, qpsi, dq_drho = self.get_q_profile(eqdsk_path=eqdsk_path, qshift=qshift)
 
         rho_max_index = np.where(np.abs(rho_pol - maximum_rho) == np.min(np.abs(rho_pol - maximum_rho)))[0][0]
         rho_min_index = np.where(np.abs(rho_pol - minimum_rho) == np.min(np.abs(rho_pol - minimum_rho)))[0][0]
